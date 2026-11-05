@@ -1,0 +1,56 @@
+{"question": "How many working days does a pour take, and are partial days rounded?", "relevant": ["ConcreteCalc/js/calc.js", "ConcreteCalc/README.md"], "slice": "natural"}
+{"question": "How is the concrete volume derived from the area and the slab thickness?", "relevant": ["ConcreteCalc/js/calc.js", "ConcreteCalc/README.md"], "slice": "natural"}
+{"question": "Where would I change the default price per cubic meter of concrete?", "relevant": ["ConcreteCalc/js/config.js", "ConcreteCalc/README.md"], "slice": "natural"}
+{"question": "Is labor priced on the volume including waste or the net volume?", "relevant": ["ConcreteCalc/js/config.js", "ConcreteCalc/README.md", "ConcreteCalc/js/calc.js"], "slice": "natural"}
+{"question": "What is the default VAT percentage in the quote calculator?", "relevant": ["ConcreteCalc/js/config.js"], "slice": "natural"}
+{"question": "How does the calculator produce a PDF quote for the client?", "relevant": ["ConcreteCalc/js/print.js", "ConcreteCalc/README.md", "ConcreteCalc/js/print-model.js"], "slice": "natural"}
+{"question": "What happens if localStorage is blocked when saving settings?", "relevant": ["ConcreteCalc/js/settings.js"], "slice": "natural"}
+{"question": "Which phone browsers do the end-to-end tests run on?", "relevant": ["ConcreteCalc/README.md", "ConcreteCalc/playwright.config.js"], "slice": "natural"}
+{"question": "How do I deploy the concrete calculator to GitHub Pages?", "relevant": ["ConcreteCalc/README.md"], "slice": "natural"}
+{"question": "Where are all the Hebrew interface strings kept?", "relevant": ["ConcreteCalc/js/strings.he.js", "ConcreteCalc/README.md"], "slice": "natural"}
+{"question": "How are numeric inputs parsed and validated in the quote form?", "relevant": ["ConcreteCalc/js/validate.js"], "slice": "natural"}
+{"question": "How are money amounts rounded so the printed lines add up to the total?", "relevant": ["ConcreteCalc/README.md", "ConcreteCalc/js/calc.js"], "slice": "natural"}
+{"question": "What is the minimum number of workers on a job?", "relevant": ["ConcreteCalc/js/config.js", "ConcreteCalc/README.md"], "slice": "natural"}
+{"question": "What is the final-year university project in the portfolio?", "relevant": ["Portfolio/index.html"], "slice": "natural"}
+{"question": "Which projects involve machine learning and what accuracy did they get?", "relevant": ["Portfolio/index.html"], "slice": "natural"}
+{"question": "How does the system health dashboard collect latency data?", "relevant": ["Portfolio/index.html"], "slice": "natural"}
+{"question": "What cryptography does the secure messaging project use?", "relevant": ["Portfolio/index.html"], "slice": "natural"}
+{"question": "Which DevOps tools has the engineer worked with?", "relevant": ["Portfolio/index.html"], "slice": "natural"}
+{"question": "How does the voice assistant talk and listen at the same time?", "relevant": ["Portfolio/index.html"], "slice": "natural"}
+{"question": "Where did the engineer study?", "relevant": ["Portfolio/index.html"], "slice": "natural"}
+{"question": "Why does the RAG system combine keyword search with embeddings?", "relevant": ["docs/DESIGN.md"], "slice": "natural"}
+{"question": "How does the RAG system avoid answering off-topic questions?", "relevant": ["docs/DESIGN.md"], "slice": "natural"}
+{"question": "Which embedding model does the retrieval use and where does it run?", "relevant": ["docs/DESIGN.md"], "slice": "natural"}
+{"question": "What retrieval metrics are reported by the evaluation?", "relevant": ["docs/DESIGN.md"], "slice": "natural"}
+{"question": "What does computeQuote return?", "relevant": ["ConcreteCalc/js/calc.js"], "slice": "identifier"}
+{"question": "Where is includeWaste read?", "relevant": ["ConcreteCalc/js/config.js", "ConcreteCalc/js/calc.js"], "slice": "identifier"}
+{"question": "What does safeFileName do?", "relevant": ["ConcreteCalc/js/print-model.js"], "slice": "identifier"}
+{"question": "How does createSettingsStore handle storage errors?", "relevant": ["ConcreteCalc/js/settings.js"], "slice": "identifier"}
+{"question": "What fields does buildPrintModel produce?", "relevant": ["ConcreteCalc/js/print-model.js"], "slice": "identifier"}
+{"question": "What is m3PerWorkerDay?", "relevant": ["ConcreteCalc/js/config.js", "ConcreteCalc/README.md"], "slice": "identifier"}
+{"question": "What does validateSettings check?", "relevant": ["ConcreteCalc/js/validate.js"], "slice": "identifier"}
+{"question": "Why is EPSILON subtracted in calcLaborDays?", "relevant": ["ConcreteCalc/js/calc.js"], "slice": "identifier"}
+{"question": "איך שומרים את הצעת המחיר כקובץ PDF באייפון?", "relevant": ["ConcreteCalc/help.html"], "slice": "hebrew"}
+{"question": "איך מתקינים את המחשבון במסך הבית של הטלפון?", "relevant": ["ConcreteCalc/help.html"], "slice": "hebrew"}
+{"question": "למה המחירים חזרו לברירת המחדל?", "relevant": ["ConcreteCalc/help.html"], "slice": "hebrew"}
+{"question": "איפה משנים את מחיר הבטון למ״ק?", "relevant": ["ConcreteCalc/help.html"], "slice": "hebrew"}
+{"question": "כמה מ״ק בטון עובד יוצק ביום?", "relevant": ["ConcreteCalc/help.html", "ConcreteCalc/js/config.js"], "slice": "hebrew"}
+{"question": "מה המשמעות של הודעה צהובה גבוה מהרגיל?", "relevant": ["ConcreteCalc/help.html"], "slice": "hebrew"}
+{"question": "Where does the health monitor keep its measurements, and how do the collector and dashboard share them?", "relevant": ["health-monitor-dashboard/README.md", "health-monitor-dashboard/docker-compose.yml", "health-monitor-dashboard/monitor.py"], "slice": "natural"}
+{"question": "How often are the monitored websites checked?", "relevant": ["health-monitor-dashboard/README.md", "health-monitor-dashboard/monitor.py"], "slice": "natural"}
+{"question": "What changed between the three versions of the voice assistant?", "relevant": ["AIVoiceAssistant/README.md"], "slice": "natural"}
+{"question": "Why don't the blocking audio calls freeze the voice assistant?", "relevant": ["AIVoiceAssistant/README.md", "AIVoiceAssistant/live_assistant.py"], "slice": "natural"}
+{"question": "How many old backups does the bash backup script keep?", "relevant": ["devops/03-bash-backup-script/README.md", "devops/03-bash-backup-script/backup.sh", "devops/README.md"], "slice": "natural"}
+{"question": "What does the Jenkins job do after running the unit tests?", "relevant": ["devops/05-jenkins-ci/README.md", "devops/05-jenkins-ci/jenkins-build.sh", "devops/README.md"], "slice": "natural"}
+{"question": "How big was the Kubernetes cluster built in the DevOps course?", "relevant": ["devops/06-kubernetes/README.md", "devops/README.md"], "slice": "natural"}
+{"question": "Which pathfinding algorithms does the maze game use, and how do they handle new walls?", "relevant": ["DynamicLabyrinths/README.md", "DynamicLabyrinths/DynamicLab/Assets/DStarLitePathfinder.cs", "DynamicLabyrinths/DynamicLab/Assets/LPAStarPathfinder.cs", "DynamicLabyrinths/DynamicLab/Assets/ARAStarPathfinder.cs"], "slice": "natural"}
+{"question": "What was the Vigilante Bot bug and how was it fixed?", "relevant": ["DynamicLabyrinths/README.md"], "slice": "natural"}
+{"question": "How are the hunter bots trained?", "relevant": ["DynamicLabyrinths/README.md", "DynamicLabyrinths/DynamicLab/Assets/HunterAgent.cs"], "slice": "natural"}
+{"question": "What does HunterAgent reward or penalize?", "relevant": ["DynamicLabyrinths/DynamicLab/Assets/HunterAgent.cs"], "slice": "identifier"}
+{"question": "What does receive_audio do in live_assistant.py?", "relevant": ["AIVoiceAssistant/live_assistant.py"], "slice": "identifier"}
+{"question": "What is the capital of Australia?", "relevant": [], "slice": "unanswerable"}
+{"question": "Can you recommend a good recipe for lasagna?", "relevant": [], "slice": "unanswerable"}
+{"question": "Who won the football world cup in 2018?", "relevant": [], "slice": "unanswerable"}
+{"question": "Explain the theory of general relativity.", "relevant": [], "slice": "unanswerable"}
+{"question": "What's the weather forecast for tomorrow?", "relevant": [], "slice": "unanswerable"}
+{"question": "How do I fix a flat bicycle tire?", "relevant": [], "slice": "unanswerable"}

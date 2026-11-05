@@ -1,0 +1,82 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Ask my projects | Elio Pikuli</title>
+  <meta name="description" content="Ask questions about Elio Pikuli's projects. Answers are grounded in the source code and docs, with a citation for every claim.">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/static/style.css">
+  <script>
+    // Runs before first paint so the saved theme never flashes (same key as the portfolio site).
+    try {
+      if (localStorage.getItem('theme') === 'light') document.documentElement.dataset.theme = 'light';
+    } catch (e) { /* storage blocked: stay on the default theme */ }
+  </script>
+</head>
+<body>
+  <header class="site-header">
+    <nav class="nav container" aria-label="Main">
+      <a href="https://elio-pikuli.vercel.app/" class="nav-brand">Elio Pikuli</a>
+      <div class="nav-menu">
+        <a href="https://elio-pikuli.vercel.app/#projects">Projects</a>
+        <button class="icon-btn" id="theme-toggle" type="button" aria-label="Switch colour theme">
+          <svg class="icon-sun" viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><circle cx="12" cy="12" r="4" fill="currentColor"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3M5 5l2 2M17 17l2 2M19 5l-2 2M7 17l-2 2" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+          <svg class="icon-moon" viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><path d="M20 14.5A8.5 8.5 0 0 1 9.5 4a8.5 8.5 0 1 0 10.5 10.5z" fill="currentColor"/></svg>
+        </button>
+      </div>
+    </nav>
+  </header>
+
+  <main id="main" class="container">
+    <section class="hero">
+      <p class="eyebrow">// ask my projects</p>
+      <h1>Ask about my work</h1>
+      <p class="hero-sub">Answers are grounded in the source code and docs of my projects, with a citation for every claim. If the sources don't cover a question, it says so instead of guessing.</p>
+      <p id="status" class="status" aria-live="polite"><span class="status-dot"></span><span id="status-text">connecting…</span></p>
+    </section>
+
+    <div class="layout">
+      <section class="chat" aria-label="Question and answer">
+        <form id="ask-form" class="ask">
+          <label for="question" class="visually-hidden">Your question</label>
+          <input id="question" name="question" type="text" maxlength="1000" autocomplete="off" dir="auto"
+                 placeholder="e.g. How is the concrete quote calculated?" required>
+          <label for="mode" class="visually-hidden">Retrieval mode</label>
+          <select id="mode" title="Retrieval mode">
+            <option value="hybrid">hybrid</option>
+            <option value="dense">dense</option>
+            <option value="bm25">bm25</option>
+          </select>
+          <button id="ask-btn" class="btn btn-primary" type="submit">Ask</button>
+        </form>
+        <p class="kicker">// try one</p>
+        <div id="examples" class="examples" aria-label="Example questions"></div>
+
+        <article id="answer" class="answer" hidden>
+          <p class="kicker">// answer</p>
+          <div id="answer-text" class="answer-text"></div>
+          <div id="answer-meta" class="answer-meta"></div>
+        </article>
+      </section>
+
+      <aside class="sources" aria-label="Retrieved context">
+        <div class="sources-head">
+          <p class="kicker">// retrieved context</p>
+          <span id="mode-hint" class="hint"></span>
+        </div>
+        <ol id="sources-list" class="sources-list"></ol>
+        <p id="sources-empty" class="empty">Ask a question to see which chunks were retrieved and why.</p>
+      </aside>
+    </div>
+  </main>
+
+  <footer class="foot container">
+    <span>CiteRAG · hybrid retrieval (BM25 + embeddings) · Claude citations</span>
+    <a href="https://elio-pikuli.vercel.app/">← back to the portfolio</a>
+  </footer>
+  <script src="/static/app.js"></script>
+</body>
+</html>

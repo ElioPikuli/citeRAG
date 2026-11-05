@@ -1,0 +1,9 @@
+.venv/
+.git/
+.claude/
+index/
+corpus/
+__pycache__/
+*.egg-info/
+.pytest_cache/
+deploy/

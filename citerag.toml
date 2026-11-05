@@ -1,0 +1,41 @@
+# What to index. Paths are relative to this file.
+# The demo corpus is the author's portfolio projects, downloaded into ./corpus by `python scripts/fetch_projects.py`.
+[corpus]
+# This project's README is left out on purpose: it quotes the other projects' identifiers and example answers,
+# so it would compete with the real sources (measured: Hit@5 dropped from 1.00 to 0.97). docs/ covers this project.
+# A missing source is skipped with a warning.
+sources = [
+    "corpus/ConcreteCalc", "corpus/Portfolio", "docs",
+    "corpus/health-monitor-dashboard", "corpus/devops", "corpus/AIVoiceAssistant", "corpus/DynamicLabyrinths",
+]
+include = [".md", ".txt", ".html", ".py", ".js", ".ts", ".css", ".json", ".toml", ".cs", ".sh", ".yml", ".yaml", "Dockerfile"]
+exclude = ["node_modules", ".git", ".venv", "test-results", "package-lock.json", "icons", "index"]
+
+[index]
+path = "index"
+embedder = "fastembed:BAAI/bge-small-en-v1.5"
+
+[chunking]
+max_chars = 1200
+overlap_chars = 200
+
+[retrieval]
+# "hybrid" (BM25 + dense, RRF), "dense" or "bm25". On the 6-project corpus hybrid and dense tie on Hit@5; hybrid
+# never misses identifier questions, so it is the default. See README "Evaluation".
+mode = "hybrid"
+top_k = 6
+candidates = 30
+mmr_lambda = 0.7
+# Abstain gate: answer only if >= min_coverage of the question's IDF-weighted terms appear in the retrieved
+# chunks, or the best cosine similarity reaches min_dense. Calibrated with `citerag eval`: off-topic questions
+# peak at cos 0.547, the weakest answerable one is at 0.566, and min_dense sits at the midpoint. The margin is
+# thin, so errors lean toward answering: the system prompt still makes Claude say when sources lack the answer.
+# min_coverage is high on purpose: with six projects indexed, "What's the weather forecast for tomorrow?" covers
+# 0.66 of its words by coincidence (a game with weather biomes, date-formatting code).
+min_coverage = 0.8
+min_dense = 0.555
+
+[generation]
+model = "claude-opus-5-5"
+effort = "low"
+max_tokens = 4096

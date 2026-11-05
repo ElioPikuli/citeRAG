@@ -106,15 +106,25 @@ starts without downloads and needs no API key:
 docker build -t citerag . && docker run --rm -p 7860:7860 citerag
 ```
 
-**Free hosting on Hugging Face Spaces** (free CPU tier; the Space sleeps after a while without visitors and
-wakes on the next visit):
+The host builds and runs the image on its own servers; nothing needs to stay running on your machine.
+
+**Free hosting on Render** (the live demo):
+
+1. In the Render dashboard: **New → Blueprint**, pick this repository. [render.yaml](render.yaml) defines a free
+   Docker web service with a health check.
+2. Render builds the image and serves it at `https://citerag.onrender.com` (or similar). Every push to `main`
+   redeploys automatically.
+
+Tested locally at Render's free-tier limits (`docker run -m 512m --cpus 0.1`): about 180 MB peak memory, ready
+in ~30 s, ~0.6 s per question after a ~2.5 s first one. Free services sleep after 15 minutes without traffic,
+so the first visit after that waits 30-60 s while it wakes.
+
+**Fallback: Hugging Face Spaces** (more CPU and memory for free, sleeps after 48 h, but rebuilds are manual):
 
 1. Create a Space at huggingface.co/new-space: SDK **Docker**, hardware **CPU basic (free)**.
 2. Upload the two files in [deploy/huggingface/](deploy/huggingface/) (`README.md` and `Dockerfile`) to the Space.
-   The Space's Dockerfile clones this repo from GitHub and builds it, so GitHub stays the single source of truth.
+   The Space's Dockerfile clones this repo from GitHub and builds it.
 3. To publish new commits later, use **Settings → Factory rebuild** on the Space.
-
-The app is then served at `https://<your-username>-<space-name>.hf.space`.
 
 ## Architecture
 

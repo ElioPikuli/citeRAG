@@ -1,0 +1,9 @@
+# Render Blueprint: Dashboard > New > Blueprint > pick this repo. Deploys on every push to main.
+services:
+  - type: web
+    name: citerag
+    runtime: docker
+    plan: free
+    dockerfilePath: ./Dockerfile
+    healthCheckPath: /api/health
+    autoDeploy: true

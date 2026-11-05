@@ -17,5 +17,10 @@ RUN git clone --depth 1 https://github.com/ElioPikuli/citeRAG.git . \
     && python scripts/fetch_projects.py \
     && python -m citerag.cli ingest
 
+# Runtime only (the index above was built with all cores): one ONNX thread is ~10x faster on a CPU-quota host
+# such as Render's free 0.1 CPU (measured: 5-10 s -> 0.6 s per question).
+ENV CITERAG_THREADS=1 OMP_NUM_THREADS=1
+
+# Hosts like Render set $PORT; Hugging Face Spaces and local runs use 7860.
 EXPOSE 7860
-CMD ["python", "-m", "citerag.cli", "serve", "--host", "0.0.0.0", "--port", "7860"]
+CMD ["sh", "-c", "exec python -m citerag.cli serve --host 0.0.0.0 --port ${PORT:-7860}"]

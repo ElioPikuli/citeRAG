@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import os
 from typing import Protocol
 
 import numpy as np
@@ -60,7 +61,10 @@ class FastEmbedEmbedder:
         from fastembed import TextEmbedding  # imported lazily: heavy, and tests don't need it
 
         self.model_name = model
-        self._model = TextEmbedding(model)
+        # CITERAG_THREADS caps ONNX threads. On a CPU-quota host (Render free: 0.1 CPU) the default of one
+        # thread per visible core causes heavy throttling; 1 thread is several times faster there.
+        threads = int(os.environ["CITERAG_THREADS"]) if os.environ.get("CITERAG_THREADS") else None
+        self._model = TextEmbedding(model, threads=threads)
         self.dim = int(next(iter(self._model.embed(["dimension probe"]))).shape[0])
         self.name = f"fastembed:{model}"
 

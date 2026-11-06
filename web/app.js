@@ -4,7 +4,7 @@ const $ = (id) => document.getElementById(id);
 const form = $("ask-form"), input = $("question"), btn = $("ask-btn");
 const answerBox = $("answer"), answerText = $("answer-text"), answerMeta = $("answer-meta");
 const modeSel = $("mode"), modeHint = $("mode-hint");
-const list = $("sources-list"), empty = $("sources-empty"), status = $("status"), statusText = $("status-text");
+const list = $("sources-list"), empty = $("sources-empty");
 
 let raw = "";          // answer text with citation placeholders
 let cited = new Set(); // hit indices cited so far
@@ -176,10 +176,6 @@ $("theme-toggle").addEventListener("click", () => {
 async function init() {
   try {
     const health = await (await fetch("/api/health")).json();
-    const offline = health.generator !== "claude";
-    statusText.textContent = `${health.files} files · ${health.chunks} chunks · ${health.embedder.split(":").pop()} · ` +
-      (offline ? "offline mode (no LLM)" : "answers by Claude");
-    status.classList.toggle("offline", offline);
     modeSel.value = health.mode;
     updateHint();
     const examples = await (await fetch("/api/examples")).json();
@@ -192,8 +188,7 @@ async function init() {
       box.appendChild(b);
     }
   } catch {
-    statusText.textContent = "server unreachable";
-    status.classList.add("offline");
+    /* server unreachable: the examples stay empty and asking shows the error */
   }
 }
 init();

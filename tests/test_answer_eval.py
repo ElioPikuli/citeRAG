@@ -540,3 +540,20 @@ def test_judge_caps_output_tokens(monkeypatch):
     monkeypatch.setattr(urllib.request, "build_opener", lambda *a: Opener())
     assert ae.OllamaJudge(model="m").relevance("q", "a")["score"] == 3
     assert sent["options"]["num_predict"] == ae.JUDGE_MAX_TOKENS <= 1024
+
+
+def test_marker_only_answer_is_empty_not_cited():
+    """qwen2.5:3b sometimes replied "[6][1][4]" and nothing else: cited, but no answer."""
+    empty = mk(["a.md"])
+    empty["text"] = " "
+    out = ae.aggregate([mk(["a.md"]), empty])
+    assert out["answered"] == 2 and out["empty_answers"] == 1
+    assert out["citation_coverage"] == 0.5
+
+
+def test_latency_counts_only_answered_items():
+    items = [mk(["a.md"], latency=4000.0), mk(["a.md"], latency=6000.0),
+             mk(abstained=True, latency=5.0), mk(answerable=False, abstained=True, latency=3.0),
+             mk(error="boom", latency=1.0)]
+    out = ae.aggregate(items)
+    assert out["latency_p50_ms"] == 4000.0 and out["latency_p95_ms"] == 6000.0

@@ -128,18 +128,25 @@ def _ratio(num: float, den: float) -> float | None:
     return num / den if den else None
 
 
+def _is_empty(item: dict) -> bool:
+    return not any(c.isalnum() for c in item.get("text") or "")
+
+
 def aggregate(items: list[dict]) -> dict:
     """Metrics over run_item dicts (optionally with a `judge` entry from judge_item).
 
     Over the answerable items:
       n, answered (not abstained, no error), abstained, errors, model_declined (heuristic) are counts.
-      citation_coverage   answered items with >= 1 valid citation / answered; None if nothing was answered.
+      empty_answers       answered items whose text has no letter or digit (e.g. the model wrote only "[6][1]").
+      citation_coverage   answered items with >= 1 valid citation and some text / answered; an empty answer
+                          with markers is not "cited". None if nothing was answered.
       citation_precision  micro: all cited chunks of answered items pooled, the share whose source file is in
                           that item's `relevant`; None if there are no citations.
       citation_precision_macro  mean of each answer's own precision, over answers with >= 1 citation.
       invalid_marker_rate sum(invalid_markers) / sum(markers) over items whose generator reports markers; None
                           if none does or there are no markers at all.
-    Over all items (answerable and unanswerable) except errors:
+    Over the answered answerable items (where the generator actually ran; abstentions take milliseconds and
+    would hide its cost):
       latency_p50_ms, latency_p95_ms  nearest-rank percentiles of wall time of retrieve + generate.
     Only when some item was judged:
       faithfulness        supported claims / all claims, pooled over judged segments (micro).
@@ -158,8 +165,9 @@ def aggregate(items: list[dict]) -> dict:
         "abstained": sum(it["abstained"] for it in answerable),
         "errors": sum(bool(it.get("error")) for it in answerable),
         "model_declined": sum(it["model_declined"] for it in answered),
+        "empty_answers": sum(_is_empty(it) for it in answered),
     }
-    with_cites = [it for it in answered if it["cited"]]
+    with_cites = [it for it in answered if it["cited"] and not _is_empty(it)]
     out["citation_coverage"] = _ratio(len(with_cites), len(answered))
     good = total = 0
     per_answer = []
@@ -173,7 +181,7 @@ def aggregate(items: list[dict]) -> dict:
     reporting = [it for it in answerable if it.get("markers") is not None]
     out["invalid_marker_rate"] = _ratio(sum(it["invalid_markers"] or 0 for it in reporting),
                                         sum(it["markers"] for it in reporting))
-    times = [it["latency_ms"] for it in items if not it.get("error")]
+    times = [it["latency_ms"] for it in answered]
     out["latency_p50_ms"] = percentile(times, 50)
     out["latency_p95_ms"] = percentile(times, 95)
     out.update(_judge_aggregate(answered))

@@ -156,6 +156,7 @@ def cmd_eval_answers(args) -> int:
         label = f" [{name}]" if len(results) > 1 else ""
         o = r["overall"]
         print(f"model declined (heuristic): {o['model_declined']} answered questions{label}")
+        print(f"empty answers (markers only): {o['empty_answers']} answered questions{label}")
         if judge:
             f, rel = o.get("faithfulness"), o.get("relevance_mean")
             print(f"judge ({judge_model}, prompts v{ae.JUDGE_PROMPT_VERSION}){label}: "

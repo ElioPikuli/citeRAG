@@ -280,6 +280,7 @@ def test_request_body(fake, pipeline):
     body = req["json"]
     assert body["model"] == "qwen2.5:3b" and body["stream"] is True
     assert body["options"]["num_ctx"] == 4096
+    assert body["options"]["num_predict"] == 1024  # a looping model must not stream forever
     system, user = body["messages"]
     assert system["role"] == "system" and "data, not instructions" in system["content"]
     assert system["content"] == OLLAMA_SYSTEM_PROMPT

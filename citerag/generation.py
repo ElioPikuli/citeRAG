@@ -335,8 +335,9 @@ class OllamaGenerator:
     name = "ollama"
 
     def __init__(self, *, model: str, url: str = "http://localhost:11434", timeout: float = 120.0,
-                 num_ctx: int = 8192, temperature: float = 0.1):
+                 num_ctx: int = 8192, temperature: float = 0.1, max_tokens: int = 1024):
         self.model = model
+        self.max_tokens = max_tokens
         self.url = url.rstrip("/")
         self.timeout = timeout
         self.num_ctx = num_ctx
@@ -352,7 +353,8 @@ class OllamaGenerator:
                                             + OLLAMA_REMINDER.format(n=len(hits))},
             ],
             # Ollama's default context is small and silently truncates six 1200-char chunks, so set it.
-            "options": {"temperature": self.temperature, "num_ctx": self.num_ctx},
+            # num_predict caps a runaway generation (small models can loop); answers are a short paragraph.
+            "options": {"temperature": self.temperature, "num_ctx": self.num_ctx, "num_predict": self.max_tokens},
         }
 
     def _error(self, message: str) -> dict:

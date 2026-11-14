@@ -288,6 +288,9 @@ def parse_relevance(raw: str) -> dict:
     return {"score": RELEVANCE_SCORES[verdict], "verdict": verdict, "reason": reason}
 
 
+JUDGE_MAX_TOKENS = 512
+
+
 class OllamaJudge:
     """Judge backed by a local Ollama model (non-streaming /api/chat with a JSON schema as `format`).
 
@@ -303,7 +306,9 @@ class OllamaJudge:
     def _http_chat(self, messages: list[dict], schema: dict) -> str:
         body = json.dumps({
             "model": self.model, "messages": messages, "stream": False, "format": schema,
-            "options": {"temperature": 0, "num_ctx": 8192},
+            # num_predict: constrained JSON decoding can loop (measured: one call ran past 10,000 tokens); a
+            # verdict with six claims is ~300 tokens, so a capped, truncated reply fails validation and is retried.
+            "options": {"temperature": 0, "num_ctx": 8192, "num_predict": JUDGE_MAX_TOKENS},
         }).encode("utf-8")
         opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))  # local: never via HTTP_PROXY
         req = urllib.request.Request(f"{self.url}/api/chat", data=body, method="POST",

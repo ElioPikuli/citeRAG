@@ -523,3 +523,20 @@ def test_cli_missing_model(tmp_path, capsys, fake_ollama):
     rc = cli.main(["--config", str(cfg), "eval-answers", "--golden", str(tmp_path / "golden.jsonl"),
                    "--judge", "ollama", "--judge-model", "missing-model", "--no-write"])
     assert rc == 1 and "ollama pull missing-model" in capsys.readouterr().err
+
+
+def test_judge_caps_output_tokens(monkeypatch):
+    """Constrained JSON decoding can loop; a real run hung on a 10,000-token judge reply before this cap."""
+    import io
+    import urllib.request
+
+    sent = {}
+
+    class Opener:
+        def open(self, req, timeout=None):
+            sent.update(json.loads(req.data))
+            return io.BytesIO(json.dumps({"message": {"content": '{"reason": "r", "verdict": "answers"}'}}).encode())
+
+    monkeypatch.setattr(urllib.request, "build_opener", lambda *a: Opener())
+    assert ae.OllamaJudge(model="m").relevance("q", "a")["score"] == 3
+    assert sent["options"]["num_predict"] == ae.JUDGE_MAX_TOKENS <= 1024

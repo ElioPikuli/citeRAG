@@ -17,7 +17,6 @@ import json
 import math
 import os
 import re
-import socket
 import urllib.error
 import urllib.request
 from collections.abc import Iterator
@@ -151,7 +150,8 @@ class ClaudeGenerator:
         }
 
 
-_SOURCE_TAG = re.compile(r"<(?=/?source)", re.IGNORECASE)
+# Tolerant of whitespace/newlines inside the tag (`</ source>`, `<\nsource`), which lenient parsers still read as tags.
+_SOURCE_TAG = re.compile(r"<(?=\s*/?\s*source\b)", re.IGNORECASE)
 
 
 def _neutralise(s: str) -> str:
@@ -160,7 +160,9 @@ def _neutralise(s: str) -> str:
 
 
 def _attr(s: str) -> str:
-    return _neutralise(s).replace('"', "'").replace("\r", " ").replace("\n", " ")
+    """Untrusted text inside a tag attribute: no quote, bracket or line break may survive to end the tag."""
+    s = _neutralise(s).replace("<", "‹").replace(">", "›").replace('"', "'")
+    return s.replace("\r", " ").replace("\n", " ")
 
 
 def format_sources(hits: list[Hit]) -> str:
@@ -173,13 +175,14 @@ def format_sources(hits: list[Hit]) -> str:
 
 
 _MARKER_BODY = re.compile(r"\d+(?:\s*,\s*\d+)*")
-_MAX_MARKER = 12
+_MAX_MARKER = 32  # longest marker body (between the brackets) that is still a marker
 
 
 class CitationParser:
     """Turns `[1]`, `[1, 2]` and `[1][3]` markers in streamed text into cite events. Pure: no I/O.
 
-    Only a trailing fragment that could still become a marker is held back, so streaming stays live.
+    Only a trailing fragment that could still become a marker (plus any spaces/tabs before it) is held back, so
+    streaming stays live. Spaces/tabs directly before a marker run are dropped: "up [1]." reads "up" + cite + ".".
     Brackets inside inline code or fenced blocks are text."""
 
     def __init__(self, n_sources: int):
@@ -253,23 +256,57 @@ class CitationParser:
                 continue
             if c == "\n" and self._inline:
                 self._inline = False
-            if c == "[" and not in_code:
-                j = i + 1
-                while j < n and j - i <= _MAX_MARKER and (s[j].isdigit() or s[j] in ", "):
+            if c in " \t" and not in_code:
+                j = i
+                while j < n and s[j] in " \t":
                     j += 1
-                if j == n and not final and j - i <= _MAX_MARKER:
+                if j < n and s[j] != "[":
+                    out.append(s[i:j])
+                    i = j
+                    continue
+                if j == n and final:
+                    out.append(s[i:j])
+                    i = j
+                    continue
+                end = None if j == n else self._marker_end(s, j, final)
+                if end is None:
+                    self._buf = s[i:]  # spaces before a possible marker: decide once we know
+                    break
+                if end >= 0:
+                    i = j  # a marker follows: the spaces before it are dropped
+                else:
+                    out.append(s[i:j])
+                    i = j
+                continue
+            if c == "[" and not in_code:
+                end = self._marker_end(s, i, final)
+                if end is None:
                     self._buf = s[i:]  # unfinished: could still become a marker
                     break
-                if j < n and s[j] == "]" and _MARKER_BODY.fullmatch(s[i + 1 : j]):
+                if end >= 0:
                     self._emit(events, out)
-                    self._add_marker(s[i + 1 : j])
-                    i = j + 1
+                    self._add_marker(s[i + 1 : end])
+                    i = end + 1
                     continue
                 self._release(events, out)
             out.append(c)
             i += 1
         self._emit(events, out)
         return events
+
+    @staticmethod
+    def _marker_end(s: str, i: int, final: bool) -> int | None:
+        """For `[` at s[i]: index of the closing `]` of a marker, -1 if it isn't one, None if the text ends
+        while it still could become one. Body length <= _MAX_MARKER whether or not the text arrives split."""
+        n = len(s)
+        j = i + 1
+        while j < n and j - i - 1 < _MAX_MARKER and (s[j].isdigit() or s[j] in ", "):
+            j += 1
+        if j == n and not final and j - i - 1 <= _MAX_MARKER:
+            return None
+        if j < n and s[j] == "]" and _MARKER_BODY.fullmatch(s[i + 1 : j]):
+            return j
+        return -1
 
     def _add_marker(self, body: str) -> None:
         hits = self._pending or []
@@ -315,15 +352,21 @@ class OllamaGenerator:
 
     def stream(self, question: str, hits: list[Hit]) -> Iterator[dict]:
         body = json.dumps(self.build_request(question, hits)).encode("utf-8")
-        req = urllib.request.Request(f"{self.url}/api/chat", data=body, method="POST",
-                                     headers={"Content-Type": "application/json"})
+        # An empty ProxyHandler: Ollama is local, so HTTP_PROXY must never capture the request.
+        opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
         try:
-            resp = urllib.request.urlopen(req, timeout=self.timeout)
+            req = urllib.request.Request(f"{self.url}/api/chat", data=body, method="POST",
+                                         headers={"Content-Type": "application/json"})
+            resp = opener.open(req, timeout=self.timeout)
         except urllib.error.HTTPError as e:
             yield self._error(self._http_message(e))
             return
         except TimeoutError:
             yield self._error(f"Ollama didn't respond within {self.timeout:.0f}s.")
+            return
+        except (ValueError, http.client.HTTPException) as e:  # bad URL, garbage status line
+            yield self._error(f"Couldn't talk to Ollama at {self.url}: check `ollama_url` in citerag.toml "
+                              f"({type(e).__name__}).")
             return
         except (urllib.error.URLError, OSError) as e:
             if isinstance(getattr(e, "reason", None), TimeoutError):
@@ -350,7 +393,12 @@ class OllamaGenerator:
                     if "error" in line:
                         yield self._error(f"Ollama error: {line['error']}")
                         return
-                    content = (line.get("message") or {}).get("content")  # "thinking" is ignored
+                    message = line.get("message")
+                    content = message.get("content") if isinstance(message, dict) else None  # "thinking" is ignored
+                    if (message is not None and not isinstance(message, dict)) or (
+                            content is not None and not isinstance(content, str)):
+                        yield self._error("Ollama sent a malformed response.")
+                        return
                     if content:
                         yield from parser.feed(content)
                     if line.get("done"):
@@ -375,13 +423,24 @@ class OllamaGenerator:
         yield self._error("Ollama closed the connection before finishing the answer.")
 
     def _http_message(self, e: urllib.error.HTTPError) -> str:
-        if e.code == 404:
-            return f"Ollama model '{self.model}' isn't installed. Run `ollama pull {self.model}`."
-        detail = ""
         try:
-            detail = str(json.loads(e.read().decode("utf-8", "replace")).get("error", ""))
-        except (ValueError, AttributeError, OSError):
+            raw = e.read().decode("utf-8", "replace")
+        except (OSError, http.client.HTTPException):
+            raw = ""
+        finally:
+            e.close()
+        detail = raw.strip()
+        try:
+            parsed = json.loads(raw)
+            if isinstance(parsed, dict) and "error" in parsed:
+                detail = str(parsed["error"])
+        except ValueError:
             pass
+        if e.code == 404:
+            low = detail.lower()
+            if "not found" in low and self.model.lower() in low:
+                return f"Ollama model '{self.model}' isn't installed. Run `ollama pull {self.model}`."
+            return f"Ollama error 404 at {self.url}: {detail or 'no details'}. Is `ollama_url` right?"
         return f"Ollama error {e.code}: {detail}" if detail else f"Ollama error {e.code}"
 
 

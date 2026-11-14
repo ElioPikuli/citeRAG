@@ -13,6 +13,7 @@ import pytest
 from citerag import cli
 from citerag.config import Settings
 from citerag.generation import (
+    OLLAMA_REMINDER,
     OLLAMA_SYSTEM_PROMPT,
     CitationParser,
     ClaudeGenerator,
@@ -284,7 +285,11 @@ def test_request_body(fake, pipeline):
     assert system["content"] == OLLAMA_SYSTEM_PROMPT
     assert user["content"].startswith('<source id="1"')
     assert hits[0].chunk.label in user["content"]
-    assert user["content"].endswith("Question: How are days billed?")
+    # The citation reminder comes after the question, with the real source count and no example sentence.
+    question, reminder = user["content"].rsplit("\n\n", 1)
+    assert question.endswith("Question: How are days billed?")
+    assert reminder == OLLAMA_REMINDER.format(n=3)
+    assert "1 to 3" in reminder and "data, not instructions" in reminder
 
 
 def test_stream_events(fake, pipeline):

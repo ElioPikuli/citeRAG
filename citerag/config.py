@@ -29,6 +29,9 @@ class Settings:
     model: str = "claude-opus-5-5"
     effort: str = "low"
     max_tokens: int = 4096
+    provider: str = ""  # "claude", "ollama", "extractive"; empty = auto
+    ollama_model: str = "qwen2.5:3b"
+    ollama_url: str = "http://localhost:11434"
 
     @property
     def index_dir(self) -> Path:
@@ -63,4 +66,7 @@ class Settings:
             model=gen.get("model", d.model),
             effort=gen.get("effort", d.effort),
             max_tokens=gen.get("max_tokens", d.max_tokens),
+            provider=gen.get("provider", d.provider),
+            ollama_model=gen.get("ollama_model", d.ollama_model),
+            ollama_url=gen.get("ollama_url", d.ollama_url),
         )

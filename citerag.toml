@@ -39,3 +39,10 @@ min_dense = 0.555
 model = "claude-opus-5-5"
 effort = "low"
 max_tokens = 4096
+# provider: "claude", "ollama" or "extractive". Unset = Claude when ANTHROPIC_API_KEY is set, else extractive.
+# CITERAG_GENERATOR overrides it.
+# provider = "ollama"
+# Any instruction-tuned model from `ollama list`. qwen2.5:3b (~2 GB) runs on a 16 GB MacBook Air M1;
+# llama3.2:3b is an alternative.
+ollama_model = "qwen2.5:3b"
+ollama_url = "http://localhost:11434"

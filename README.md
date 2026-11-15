@@ -97,6 +97,58 @@ out), and the portfolio site's pages are downloaded from the live site. A missin
 To index your own documents, edit `[corpus]` in [citerag.toml](citerag.toml): `sources` (folders or files,
 relative to the config file), `include` (extensions or exact file names) and `exclude` (directory or file names).
 
+### Local answers with Ollama (free)
+
+Any instruction-tuned model served by [Ollama](https://ollama.com) can write the answers. The model is set by
+`ollama_model` in `[generation]`; `qwen2.5:3b` (about 2 GB) runs on a 16 GB MacBook Air M1.
+
+```bash
+ollama pull qwen2.5:3b
+```
+
+```bash
+CITERAG_GENERATOR=ollama .venv/bin/citerag ask "How does ConcreteCalc compute labor days?"
+```
+
+Ollama has no citation API, so the chunks are sent as numbered `<source>` blocks and the model writes `[n]`
+markers, which are parsed back into citations. Markers that point to a source that wasn't retrieved are dropped
+and counted. Small models need firm prompting to cite at all; see "Answer quality" below for what that took and
+how well it works. If Ollama isn't running, the answer is a one-line error telling you to run `ollama serve`.
+
+### Traces and metrics
+
+Every `/api/ask` and `/api/search` request, and every `citerag ask` and `citerag search`, appends one JSON line to
+`traces/{date}.jsonl`. Each line records:
+- the question, cut to 300 characters
+- the retrieval mode and the top hits with their scores
+- the abstain-gate decision
+- the generator and model
+- tokens used
+- the time spent retrieving, gating and generating, plus the total
+- an estimated cost
+- the citation and invalid-marker counts
+- the error type, if the request failed
+
+To see a summary of recent requests:
+
+```bash
+.venv/bin/citerag traces --last 200
+```
+
+The summary covers abstain, error and cancel rates, p50/p95 latency per stage for answers (searches are reported
+separately), citations per answer, tokens and the total estimated cost. `GET /metrics` returns the same summary as
+JSON, and the web UI shows it in a Metrics panel.
+
+- **Cost** is estimated from a `[pricing]` table in [citerag.toml](citerag.toml) (Anthropic list prices, USD per
+  million tokens). Ollama, extractive answers, searches and abstentions cost $0. A Claude model missing from the
+  table is recorded as `null` and counted as "unknown", never as $0.
+- **Tracing never breaks a request:** if a trace can't be written, a warning is logged and the answer still
+  streams.
+- **Privacy and limits:** `/metrics` returns aggregates only, never question text. Trace files hold visitors'
+  questions, so they are gitignored and kept out of the Docker image. They are capped at 50 MB a day and deleted
+  after 14 days (`[tracing]` in citerag.toml). `CITERAG_TRACING=0` turns tracing off. On Render's free tier the
+  disk is wiped on every deploy or spin-down, so the hosted demo's metrics only cover requests since it last woke.
+
 ## Run with Docker / host it for free
 
 The [Dockerfile](Dockerfile) builds everything into the image (corpus, embedding model, index), so the container
@@ -307,10 +359,12 @@ Caveats:
 
 ## Testing
 
-191 tests, all offline (no Ollama, network or API key), ~16 s. They cover the Ollama generator against an
+247 tests, all offline (no Ollama, network or API key), ~16 s. They cover the Ollama generator against an
 in-process fake server (citation-marker parsing under any fragmenting, invalid markers, source-block injection,
 unreachable or broken servers) and the answer eval (metric arithmetic on hand-built answers, judge JSON
-validation and retry, the sanity check, a CLI run with fakes). The original 64 cover the tokenizer, line-preserving HTML conversion, chunk boundaries and line numbers,
+validation and retry, the sanity check, a CLI run with fakes) and tracing (every request outcome including
+crashes and disconnects, a failing trace write, cost rules, aggregation maths, bounded reads of large trace
+files). The original 64 cover the tokenizer, line-preserving HTML conversion, chunk boundaries and line numbers,
 BM25 against hand-computed scores, RRF and MMR, index round-trip and incremental rebuilds, the Claude generator
 against a fake client (exact request shape: `search_result` blocks, adaptive thinking, effort, refusal fallback;
 mapping of `citations_delta` events to chunk indices; refusal and API errors), the abstain gate, the SSE API

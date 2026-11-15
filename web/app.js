@@ -139,8 +139,10 @@ async function ask(question) {
         if (ev.usage) parts.push(`tokens ${ev.usage.input_tokens} in / ${ev.usage.output_tokens} out`);
         parts.push(`${cited.size} source${cited.size === 1 ? "" : "s"} cited`);
         answerMeta.textContent = parts.join(" · ");
+        refreshMetrics();
       } else if (ev.type === "error") {
         answerMeta.innerHTML = `<span class="error">${escapeHtml(ev.message)}</span>`;
+        refreshMetrics();
       }
     }
   } catch (err) {
@@ -164,6 +166,54 @@ const HINTS = {
 };
 function updateHint() { modeHint.textContent = HINTS[modeSel.value]; }
 modeSel.addEventListener("change", updateHint);
+
+// Metrics panel: aggregates from /metrics, built with textContent only.
+const metricsBox = $("metrics"), metricsNote = $("metrics-note"), metricsGrid = $("metrics-grid");
+const pct = (x) => (x === null || x === undefined ? "n/a" : `${(x * 100).toFixed(1)}%`);
+const ms = (x) => (x === null || x === undefined ? "n/a" : `${Math.round(x)} ms`);
+
+function metricRows(m) {
+  const lat = (stage) => `${ms(m.latency_ms[stage].p50)} / ${ms(m.latency_ms[stage].p95)}`;
+  const cost = `$${m.cost_usd.total.toFixed(4)}` + (m.cost_usd.unknown ? ` (${m.cost_usd.unknown} unknown)` : "");
+  return [
+    ["requests", `${m.requests} (${m.asks} asks, ${m.searches} searches)`],
+    ["abstain rate", pct(m.abstain_rate)],
+    ["error rate", pct(m.error_rate)],
+    ["total p50 / p95", lat("total")],
+    ["generate p50 / p95", lat("generate")],
+    ["citations per answer", m.citations_per_answer === null ? "n/a" : m.citations_per_answer.toFixed(1)],
+    ["estimated cost", cost],
+  ];
+}
+
+async function refreshMetrics() {
+  if (!metricsBox.open) return;
+  try {
+    const res = await fetch("/metrics?last=200");
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const m = await res.json();
+    if (!m.enabled) {
+      metricsNote.textContent = "Tracing is off";
+      metricsGrid.hidden = true;
+      return;
+    }
+    metricsGrid.textContent = "";
+    for (const [label, value] of metricRows(m)) {
+      const wrap = document.createElement("div");
+      const dt = document.createElement("dt"), dd = document.createElement("dd");
+      dt.textContent = label;
+      dd.textContent = value;
+      wrap.append(dt, dd);
+      metricsGrid.appendChild(wrap);
+    }
+    metricsNote.textContent = `Aggregates over the last ${m.requests} requests (up to ${m.last}).`;
+    metricsGrid.hidden = false;
+  } catch (err) {
+    metricsNote.textContent = `Could not load metrics: ${err.message}`;
+    metricsGrid.hidden = true;
+  }
+}
+metricsBox.addEventListener("toggle", refreshMetrics);
 
 // Theme toggle: same storage key as the portfolio site.
 $("theme-toggle").addEventListener("click", () => {

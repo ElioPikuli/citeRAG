@@ -148,6 +148,15 @@ a { color: inherit; }
   background: var(--bg); font: 0.75rem/1.5 var(--font-mono); white-space: pre-wrap;
 }
 
+/* Metrics */
+.metrics { margin-bottom: 56px; padding: 14px 20px; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); }
+.metrics summary { font-size: 0.8125rem; font-weight: 600; color: var(--accent); cursor: pointer; }
+.metrics .hint { margin-top: 10px; }
+.metrics-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 10px; margin: 12px 0 0; }
+.metrics-grid > div { padding: 8px 12px; border-radius: 8px; background: var(--surface-raised); min-width: 0; }
+.metrics-grid dt { font: 0.6875rem/1.6 var(--font-mono); color: var(--text-muted); }
+.metrics-grid dd { margin: 0; font: 600 0.875rem/1.5 var(--font-mono); overflow-wrap: anywhere; }
+
 /* Footer */
 .foot {
   display: flex; flex-wrap: wrap; justify-content: space-between; gap: 8px; padding-block: 24px 40px;

@@ -3,6 +3,7 @@
 GET  /api/health                  index and generator status
 GET  /api/search?q=&k=&mode=      retrieval only (debugging, eval)
 POST /api/ask {question, k}       Server-Sent Events: sources, token*, cite*, done | error
+GET  /metrics?last=200            aggregates over the last N request traces (no questions, no hit details)
 """
 
 from __future__ import annotations
@@ -18,6 +19,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from .pipeline import RagPipeline
+from .tracing import Tracer, load_traces, summarise, traced_search, traced_stream
 
 WEB_DIR = Path(__file__).resolve().parent.parent / "web"
 
@@ -41,7 +43,8 @@ def _sse(event: dict) -> str:
     return f"event: {event['type']}\ndata: {json.dumps(event, ensure_ascii=False)}\n\n"
 
 
-def create_app(pipeline: RagPipeline) -> FastAPI:
+def create_app(pipeline: RagPipeline, tracer: Tracer | None = None) -> FastAPI:
+    """`tracer=None` turns tracing off, so tests never write into the repo."""
     app = FastAPI(title="CiteRAG", version="0.1.0")
     index = pipeline.retriever.index
 
@@ -54,7 +57,15 @@ def create_app(pipeline: RagPipeline) -> FastAPI:
             "embedder": index.embedder_name,
             "generator": pipeline.generator.name,
             "mode": pipeline.retriever.mode,
+            "tracing": bool(tracer and tracer.enabled),
         }
+
+    @app.get("/metrics")
+    def metrics(last: int = Query(default=200, ge=1, le=10000)) -> dict:
+        if tracer is None or not tracer.enabled:
+            return {"enabled": False, "last": last, "malformed_lines": 0, **summarise([])}
+        traces, malformed = load_traces(tracer.directory, last)
+        return {"enabled": True, "last": last, "malformed_lines": malformed, **summarise(traces)}
 
     @app.get("/api/examples")
     def examples() -> list[str]:
@@ -66,7 +77,7 @@ def create_app(pipeline: RagPipeline) -> FastAPI:
         k: int = Query(default=6, ge=1, le=50),
         mode: Literal["hybrid", "bm25", "dense"] | None = None,
     ) -> dict:
-        hits = pipeline.retriever.search(q, k, mode=mode)
+        hits = traced_search(pipeline, tracer, q, k, mode, source="api")
         return {"query": q, "mode": mode or pipeline.retriever.mode, "hits": [h.to_dict() for h in hits]}
 
     @app.post("/api/ask")
@@ -77,7 +88,7 @@ def create_app(pipeline: RagPipeline) -> FastAPI:
 
         def events() -> Iterator[str]:
             try:
-                for ev in pipeline.stream(question, req.k, req.mode):
+                for ev in traced_stream(pipeline, tracer, question, req.k, req.mode, source="api"):
                     yield _sse(ev)
             except Exception as e:  # never leave the client hanging on a half-open stream
                 yield _sse({"type": "error", "message": f"internal error: {type(e).__name__}"})
@@ -102,4 +113,6 @@ def app_from_settings(config: str = "citerag.toml") -> FastAPI:
     from .config import Settings
     from .engine import load_pipeline
 
-    return create_app(load_pipeline(Settings.load(config)))
+    settings = Settings.load(config)
+    tracer = Tracer(settings.trace_path, enabled=settings.tracing_enabled, pricing=settings.pricing)
+    return create_app(load_pipeline(settings), tracer)

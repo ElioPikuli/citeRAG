@@ -79,8 +79,11 @@ class RagPipeline:
     def retrieve(self, question: str, k: int | None = None, mode: str | None = None) -> tuple[list[Hit], dict]:
         t0 = time.perf_counter()
         hits = self.retriever.search(question, k or self.top_k, mode=mode)
+        t1 = time.perf_counter()
         ok, gate = self.answerable(question, hits)
-        gate = {**gate, "answerable": ok, "mode": mode or self.retriever.mode, "retrieval_ms": round((time.perf_counter() - t0) * 1000, 1)}
+        t2 = time.perf_counter()
+        gate = {**gate, "answerable": ok, "mode": mode or self.retriever.mode,
+                "retrieval_ms": round((t1 - t0) * 1000, 1), "gate_ms": round((t2 - t1) * 1000, 1)}
         return hits, gate
 
     def generate(self, question: str, hits: list[Hit], gate: dict) -> Iterator[dict]:

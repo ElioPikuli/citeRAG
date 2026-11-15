@@ -46,3 +46,18 @@ max_tokens = 4096
 # llama3.2:3b is an alternative.
 ollama_model = "qwen2.5:3b"
 ollama_url = "http://localhost:11434"
+
+[tracing]
+# One JSON line per /ask and /search request in traces/{date}.jsonl (gitignored). Questions are stored truncated
+# to 300 characters; /metrics serves only aggregates.
+enabled = true
+dir = "traces"
+
+# Estimated cost in USD per million tokens, Anthropic first-party API list prices (checked 2026-11-03). Used only
+# for the cost estimate in traces. Local (Ollama) and extractive answers cost $0; a model missing here is
+# recorded as cost null, not 0. Cache and fast-mode pricing are not modelled (citeRAG uses neither).
+[pricing]
+"claude-opus-5-5" = { input = 4.00, output = 20.00 }
+"claude-sonnet-5-5" = { input = 2.00, output = 10.00 }
+"claude-haiku-5-5" = { input = 0.10, output = 0.50 }  # prompts up to 100K tokens
+"claude-fable-5-2" = { input = 8.00, output = 40.00 }

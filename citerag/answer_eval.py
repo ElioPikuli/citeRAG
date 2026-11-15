@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import http.client
 import json
-import math
 import re
 import subprocess
 import time
@@ -21,6 +20,7 @@ from pathlib import Path
 
 from .evaluation import GoldenItem
 from .generation import EXTRACTIVE_HEADER
+from .stats import percentile  # noqa: F401  (re-exported: tests and callers use answer_eval.percentile)
 from .judge_prompts import (
     FAITHFULNESS_SCHEMA,
     FAITHFULNESS_SYSTEM,
@@ -132,15 +132,6 @@ def run_item(pipeline, item: GoldenItem) -> dict:
 
 
 # ---- deterministic metrics --------------------------------------------------------------------------
-
-def percentile(values: list[float], p: float) -> float | None:
-    """Nearest-rank percentile: the ceil(p/100*n)-th smallest value. None for an empty list."""
-    if not values:
-        return None
-    ordered = sorted(values)
-    rank = max(1, math.ceil(p / 100 * len(ordered)))
-    return ordered[min(rank, len(ordered)) - 1]
-
 
 def _is_answered(it: dict) -> bool:
     return not it["abstained"] and not it.get("error")

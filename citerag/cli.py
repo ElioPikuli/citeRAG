@@ -1,4 +1,4 @@
-"""Command line: citerag ingest | search | ask | eval | eval-answers | serve"""
+"""Command line: citerag ingest | search | ask | eval | eval-answers | traces | serve"""
 
 from __future__ import annotations
 
@@ -25,11 +25,20 @@ def cmd_ingest(args) -> int:
     return 0
 
 
+def _tracer(settings: Settings):
+    from .tracing import Tracer
+
+    return Tracer(settings.trace_path, enabled=settings.tracing_enabled, pricing=settings.pricing)
+
+
 def cmd_search(args) -> int:
     from .engine import load_pipeline
+    from .tracing import traced_search
 
-    p = load_pipeline(_settings(args))
-    for rank, h in enumerate(p.retriever.search(args.query, args.k, mode=args.mode), start=1):
+    settings = _settings(args)
+    p = load_pipeline(settings)
+    hits = traced_search(p, _tracer(settings), args.query, args.k, args.mode, source="cli")
+    for rank, h in enumerate(hits, start=1):
         print(f"{rank:>2}. {h.chunk.label}  [{h.chunk.title}]")
         print(f"    score={h.score:.4f} bm25_rank={h.bm25_rank} dense_rank={h.dense_rank} cos={h.dense:.3f}")
     return 0
@@ -37,10 +46,12 @@ def cmd_search(args) -> int:
 
 def cmd_ask(args) -> int:
     from .engine import load_pipeline
+    from .tracing import traced_stream
 
-    p = load_pipeline(_settings(args))
+    settings = _settings(args)
+    p = load_pipeline(settings)
     hits: list[dict] = []
-    for ev in p.stream(args.question):
+    for ev in traced_stream(p, _tracer(settings), args.question, source="cli"):
         if ev["type"] == "sources":
             hits = ev["hits"]
         elif ev["type"] == "token":
@@ -217,6 +228,26 @@ def cmd_eval_answers(args) -> int:
     return 0
 
 
+def cmd_traces(args) -> int:
+    import json
+
+    from .tracing import format_summary, load_traces, summarise
+
+    directory = _settings(args).trace_path
+    traces, malformed = load_traces(directory, args.last)
+    if not traces:
+        print(f"no traces in {directory}")
+        return 0
+    summary = summarise(traces)
+    if args.json:
+        print(json.dumps({"malformed_lines": malformed, **summary}, indent=2))
+    else:
+        print(format_summary(summary))
+        if malformed:
+            print(f"({malformed} malformed lines skipped)")
+    return 0
+
+
 def cmd_serve(args) -> int:
     import uvicorn
 
@@ -264,6 +295,11 @@ def main(argv: list[str] | None = None) -> int:
     s.add_argument("--no-write", action="store_true", help="don't write the results file")
     s.add_argument("-v", "--verbose", action="store_true")
     s.set_defaults(fn=cmd_eval_answers)
+
+    s = sub.add_parser("traces", help="summarise recent request traces (latency, cost, errors)")
+    s.add_argument("--last", type=int, default=200, help="newest N traces (default 200)")
+    s.add_argument("--json", action="store_true")
+    s.set_defaults(fn=cmd_traces)
 
     s = sub.add_parser("serve", help="run the web app")
     s.add_argument("--host", default="127.0.0.1")

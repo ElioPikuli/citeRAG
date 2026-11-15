@@ -32,10 +32,17 @@ class Settings:
     provider: str = ""  # "claude", "ollama", "extractive"; empty = auto
     ollama_model: str = "qwen2.5:3b"
     ollama_url: str = "http://localhost:11434"
+    tracing_enabled: bool = True
+    trace_dir: str = "traces"
+    pricing: dict = field(default_factory=dict)  # model -> {input, output} in USD per million tokens
 
     @property
     def index_dir(self) -> Path:
         return (self.root / self.index_path).resolve()
+
+    @property
+    def trace_path(self) -> Path:
+        return (self.root / self.trace_dir).resolve()
 
     def source_paths(self) -> list[Path]:
         return [(self.root / s).resolve() for s in self.sources]
@@ -46,7 +53,7 @@ class Settings:
         data = tomllib.loads(path.read_text(encoding="utf-8"))
         corpus, index = data.get("corpus", {}), data.get("index", {})
         chunking, retrieval = data.get("chunking", {}), data.get("retrieval", {})
-        gen = data.get("generation", {})
+        gen, tracing = data.get("generation", {}), data.get("tracing", {})
         d = cls()
         return cls(
             root=path.parent,
@@ -69,4 +76,7 @@ class Settings:
             provider=gen.get("provider", d.provider),
             ollama_model=gen.get("ollama_model", d.ollama_model),
             ollama_url=gen.get("ollama_url", d.ollama_url),
+            tracing_enabled=tracing.get("enabled", d.tracing_enabled),
+            trace_dir=tracing.get("dir", d.trace_dir),
+            pricing=dict(data.get("pricing", {})),
         )

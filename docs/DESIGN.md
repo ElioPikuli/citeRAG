@@ -70,7 +70,7 @@ The eval reports all three so the choice is justified by numbers.
 *Outcome:* the answer depended on the corpus. With two projects indexed, dense retrieval was best or tied on
 every slice, identifiers included, because chunks are embedded with their heading path
 (`calc.js > calcLaborDays`), so dense shipped as the default. With six projects (78 files, much more code), dense
-and hybrid tie on Hit@5 (0.98), hybrid leads on nDCG@5 (0.850 vs 0.831), and dense misses 1 of 10 identifier
+and hybrid tie on Hit@5 (0.98), hybrid leads on nDCG@5 (0.851 vs 0.832), and dense misses 1 of 10 identifier
 questions that hybrid answers. The default is now `mode = "hybrid"`. With 50 answerable questions these gaps are
 close to noise, so this is a default to re-check as the corpus grows.
 

@@ -291,22 +291,24 @@ Full design notes and trade-offs: [docs/DESIGN.md](docs/DESIGN.md).
 
 [eval/golden.jsonl](eval/golden.jsonl) holds 56 hand-written questions: 34 natural-language, 10 that name code
 identifiers, 6 in Hebrew, and 6 unanswerable ones. Relevance is judged per file, so the set survives chunking
-changes. `citerag eval` on the six-project corpus (78 files, 523 chunks), k = 5:
+changes. `citerag eval` on the six-project corpus (78 files, 530 chunks, fetched 2026-11-15), k = 5:
 
 | questions | retriever | Hit@5 | Recall@5 | MRR | nDCG@5 |
 |---|---|---|---|---|---|
-| all (50) | bm25 | 0.960 | 0.858 | 0.842 | 0.806 |
-| all (50) | dense | 0.980 | 0.872 | 0.878 | 0.831 |
-| all (50) | **hybrid** | **0.980** | **0.878** | **0.885** | **0.850** |
-| natural (34) | bm25 | 0.941 | 0.836 | 0.825 | 0.783 |
-| natural (34) | dense | 1.000 | 0.870 | 0.874 | 0.809 |
-| natural (34) | hybrid | 0.971 | 0.865 | 0.868 | 0.831 |
+| all (50) | bm25 | 0.960 | 0.858 | 0.816 | 0.786 |
+| all (50) | dense | 0.980 | 0.877 | 0.878 | 0.832 |
+| all (50) | **hybrid** | **0.980** | **0.878** | **0.885** | **0.851** |
+| natural (34) | bm25 | 0.941 | 0.836 | 0.785 | 0.754 |
+| natural (34) | dense | 1.000 | 0.877 | 0.874 | 0.816 |
+| natural (34) | hybrid | 0.971 | 0.865 | 0.868 | 0.832 |
 | identifier (10) | bm25 | 1.000 | 0.900 | 0.808 | 0.805 |
 | identifier (10) | dense | 0.900 | 0.850 | 0.820 | 0.824 |
 | identifier (10) | hybrid | 1.000 | 0.900 | 0.875 | 0.865 |
 | hebrew (6) | all three | 1.000 | 0.917 | 1.000 | 0.936 |
 
-Abstain gate: answered 50/50 answerable questions and refused 6/6 unanswerable ones.
+Abstain gate: answered 50/50 answerable questions and refused 6/6 unanswerable ones. The projects are fetched at
+their latest versions, so these numbers drift slightly as they change; CI re-runs this eval on every push and
+fails below Hit@5 0.95 or on any wrong gate decision.
 
 **What I learned from it.** I designed the system around hybrid retrieval, expecting BM25 to win on code
 identifiers. With only two projects indexed, it didn't: dense retrieval was best or tied on every slice, because

@@ -209,9 +209,108 @@ sources. It is now excluded from the corpus; [docs/DESIGN.md](docs/DESIGN.md) co
 `tests/test_evaluation.py` fails the build if Hit@5 of the configured retriever drops below 0.95, MRR below 0.85, or the gate starts
 answering unanswerable questions.
 
+### Answer quality
+
+Retrieval metrics say whether the right file was found, not whether the answer is any good. `citerag eval-answers`
+runs the same 56 questions through the whole pipeline and scores the answers, for free: the generators are the
+offline extractive one and a local model through [Ollama](https://ollama.com), and the optional judge is a local
+model too. Claude isn't an option here, so the eval never makes a paid call.
+
+```bash
+citerag eval-answers --generator extractive --generator ollama --judge ollama -v
+```
+
+Deterministic metrics, always computed:
+- **cited:** share of answers with at least one valid citation and some actual text.
+- **cit. precision:** of all cited chunks, the share whose file is in the question's `relevant` list (pooled).
+- **invalid markers:** `[n]` markers pointing to a source that wasn't retrieved (local models write their own
+  markers; Claude's citations come from the API and can't be invalid).
+- **abstain behaviour:** the gate check from `citerag eval`, plus heuristic counts of answers that decline or
+  contain only markers.
+
+The judge (`--judge ollama`) adds:
+- **faithfulness:** each cited sentence is split into claims and checked against exactly the chunks it cites;
+  the score is the share of supported claims.
+- **relevance:** whether the answer addresses the question, from 1 (off topic, or "not in the sources") to 3.
+
+The judge prompts are versioned in [citerag/judge_prompts.py](citerag/judge_prompts.py). Replies must be JSON
+matching a schema; a bad reply gets one retry and is then recorded as a judge error, never dropped. Before its
+scores are used, the judge is checked against
+[eval/judge_sanity.jsonl](eval/judge_sanity.jsonl): 8 hand-written bad answers (a wrong number, a claim cited to
+the wrong chunk, an added detail, an off-topic reply) and 2 good ones.
+
+Results on a MacBook Air M1 (16 GB), generator and judge both `qwen2.5:3b` (Q4_K_M) on Ollama 0.40.16, prompts
+v2026-11-15.2, commit `dd69f7e`. Full output: [eval/results/answers-2026-11-15.json](eval/results/answers-2026-11-15.json).
+
+| questions | generator | answered | cited | cit. precision | invalid markers | faithfulness | relevance | p50 ms | p95 ms |
+|---|---|---|---|---|---|---|---|---|---|
+| all (50) | extractive | 50/50 | 1.000 | 0.639 | n/a | 0.863 | 2.04 | 21 | 29 |
+| all (50) | ollama | 50/50 | 1.000 | 0.645 | 0.000 | 0.743 | 2.58 | 4673 | 15140 |
+| natural (34) | extractive | 34/34 | 1.000 | 0.679 | n/a | 0.898 | 2.09 | 20 | 27 |
+| natural (34) | ollama | 34/34 | 1.000 | 0.595 | 0.000 | 0.705 | 2.65 | 4545 | 16466 |
+| identifier (10) | extractive | 10/10 | 1.000 | 0.522 | n/a | 0.707 | 2.00 | 21 | 47 |
+| identifier (10) | ollama | 10/10 | 1.000 | 0.750 | 0.000 | 0.815 | 2.90 | 3602 | 7234 |
+| hebrew (6) | extractive | 6/6 | 1.000 | 0.600 | n/a | 0.955 | 1.83 | 26 | 29 |
+| hebrew (6) | ollama | 6/6 | 1.000 | 0.875 | 0.000 | 0.857 | 1.67 | 4814 | 11027 |
+
+Abstain gate: answered 50/50 answerable, refused 6/6 unanswerable. Judge sanity check: caught 8/8 bad answers,
+0 false alarms on the 2 good ones. Judge errors: 0 of 315 calls. Ollama wrote 142 markers, none invalid, and no
+answer consisted of markers only or hit the token cap.
+
+**What I learned from it.** The first local runs were the most useful part, because each one exposed a problem I
+then fixed:
+- qwen2.5:3b ignored a citation rule that only appeared in the system prompt.
+- Given an example sentence, it copied that sentence into its answers.
+- Once told to cite after each sentence, it answered 3 of 12 test questions with markers alone (`[6][1][4]`).
+
+The fix for all three was a short reminder after the question that shows the bare `[n]` format and asks for full
+sentences ([generation.py](citerag/generation.py)).
+
+The judge needed the same treatment. Asked for a 1–3 relevance number, it gave 1 to every answer, correct ones
+included. Word verdicts (`answers` / `partial` / `off_topic`) with the reason written first fixed it.
+
+The eval also caught bugs in the eval itself, so I reran it until the numbers stood up:
+- A judge call that looped past 10,000 tokens stalled a run for 16 minutes, so generations are now capped.
+- The extractive header was being judged as a claim.
+- Citation markers with no text before them were never shown to the judge.
+
+Reading the results:
+- **The judge's error floor is about 14 points.** Extractive answers are verbatim quotes of the chunks they cite,
+  so their true faithfulness is close to 1.0. The judge rejected 14% of their claims, usually because a quote was
+  a fragment like "questions that hybrid answers." So a faithfulness gap smaller than that is not evidence, and
+  0.743 for Ollama means "somewhat below the extractive baseline", not "a quarter of the claims are false". Some
+  of its rejections are real, though: one answer says quote history is saved in `localStorage`, while the README
+  says history is planned for version 2.0.
+- **Citation precision is about the file, not the claim.** It counts a citation as good when its file is in the
+  golden `relevant` list. A cited chunk can come from a relevant file and still not support the sentence, and a
+  file missing from the list can still be a fair source. Faithfulness is the stricter check.
+- **The local model has trouble with Hebrew.** In 4 of the 6 Hebrew answers, qwen2.5:3b copied the prompt's source
+  syntax (`[source id="2" file=…]`) instead of answering. That is why its Hebrew relevance is 1.67. I haven't fixed
+  this yet; a larger model or a Hebrew-aware reminder are the obvious things to try.
+- **Extractive relevance (2.04) is low by design.** It quotes the passages that best match the question instead of
+  writing an answer.
+
+Caveats:
+- 50 answerable questions and a 10-item sanity check are small; one question moves a slice score a lot, and the
+  Hebrew and identifier slices have 6 and 10 questions.
+- The generator and the judge are the same 3B model, so the judge may be lenient toward its own style. A larger
+  local judge (`--judge-model`) is the first thing to try, and its sanity check score should be reported next to
+  its numbers.
+- Faithfulness covers cited sentences only: 11 of Ollama's 76 answer segments had no citation and weren't judged.
+- The 36 markers with no text before them (for example `[6] When …`) were attached to the nearest sentence; which
+  side the model meant is a guess.
+- Latency is wall time per answered question (retrieval plus generation), measured during the eval while the judge
+  shared the Ollama server; the first question includes loading the model. The p95 of a 6-question slice is its
+  slowest question.
+- The run recorded `git_dirty: true` because of two untracked files (the plan document and the results file being
+  written); no tracked code was modified.
+
 ## Testing
 
-64 tests, all offline, ~3 s: tokenizer, line-preserving HTML conversion, chunk boundaries and line numbers,
+191 tests, all offline (no Ollama, network or API key), ~16 s. They cover the Ollama generator against an
+in-process fake server (citation-marker parsing under any fragmenting, invalid markers, source-block injection,
+unreachable or broken servers) and the answer eval (metric arithmetic on hand-built answers, judge JSON
+validation and retry, the sanity check, a CLI run with fakes). The original 64 cover the tokenizer, line-preserving HTML conversion, chunk boundaries and line numbers,
 BM25 against hand-computed scores, RRF and MMR, index round-trip and incremental rebuilds, the Claude generator
 against a fake client (exact request shape: `search_result` blocks, adaptive thinking, effort, refusal fallback;
 mapping of `citations_delta` events to chunk indices; refusal and API errors), the abstain gate, the SSE API

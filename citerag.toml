@@ -50,14 +50,24 @@ ollama_url = "http://localhost:11434"
 [tracing]
 # One JSON line per /ask and /search request in traces/{date}.jsonl (gitignored). Questions are stored truncated
 # to 300 characters; /metrics serves only aggregates.
-enabled = true
+enabled = true  # the environment variable CITERAG_TRACING=0|1 overrides this
 dir = "traces"
+# /metrics is public, so the trace files are bounded: once today's file exceeds max_file_mb, no more traces are
+# written that day (one warning in the log); files older than retention_days are deleted on the first write of a day.
+max_file_mb = 50
+retention_days = 14
 
 # Estimated cost in USD per million tokens, Anthropic first-party API list prices (checked 2026-11-03). Used only
 # for the cost estimate in traces. Local (Ollama) and extractive answers cost $0; a model missing here is
 # recorded as cost null, not 0. Cache and fast-mode pricing are not modelled (citeRAG uses neither).
 [pricing]
 "claude-opus-5-5" = { input = 4.00, output = 20.00 }
+# A model id with a date suffix ("claude-opus-5-5-20261101") is priced as the longest key that prefixes it.
+# Refusal fallbacks may answer from an older model than the one configured; the `model` field of the trace
+# (from the final message) records which one actually answered, so these entries keep that cost estimable.
+"claude-opus-5" = { input = 5.00, output = 25.00 }
+"claude-sonnet-5" = { input = 2.00, output = 10.00 }
+"claude-opus-4-8" = { input = 5.00, output = 25.00 }
 "claude-sonnet-5-5" = { input = 2.00, output = 10.00 }
 "claude-haiku-5-5" = { input = 0.10, output = 0.50 }  # prompts up to 100K tokens
 "claude-fable-5-2" = { input = 8.00, output = 40.00 }

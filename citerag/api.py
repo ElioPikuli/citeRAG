@@ -9,6 +9,8 @@ GET  /metrics?last=200            aggregates over the last N request traces (no 
 from __future__ import annotations
 
 import json
+import threading
+import time
 from collections.abc import Iterator
 from pathlib import Path
 from typing import Literal
@@ -39,6 +41,14 @@ class AskRequest(BaseModel):
     mode: Literal["hybrid", "bm25", "dense"] | None = None
 
 
+METRICS_TTL_S = 5.0
+METRICS_MAX_LAST = 1000
+
+
+def _now() -> float:
+    return time.monotonic()
+
+
 def _sse(event: dict) -> str:
     return f"event: {event['type']}\ndata: {json.dumps(event, ensure_ascii=False)}\n\n"
 
@@ -60,12 +70,22 @@ def create_app(pipeline: RagPipeline, tracer: Tracer | None = None) -> FastAPI:
             "tracing": bool(tracer and tracer.enabled),
         }
 
+    metrics_cache: dict[int, tuple[float, dict]] = {}
+    metrics_lock = threading.Lock()
+
     @app.get("/metrics")
-    def metrics(last: int = Query(default=200, ge=1, le=10000)) -> dict:
+    def metrics(last: int = Query(default=200, ge=1, le=METRICS_MAX_LAST)) -> dict:
         if tracer is None or not tracer.enabled:
             return {"enabled": False, "last": last, "malformed_lines": 0, **summarise([])}
-        traces, malformed = load_traces(tracer.directory, last)
-        return {"enabled": True, "last": last, "malformed_lines": malformed, **summarise(traces)}
+        # Public endpoint that reads files: recompute at most once per TTL per `last` value.
+        with metrics_lock:
+            cached = metrics_cache.get(last)
+            if cached and _now() - cached[0] < METRICS_TTL_S:
+                return cached[1]
+            traces, malformed = load_traces(tracer.directory, last)
+            payload = {"enabled": True, "last": last, "malformed_lines": malformed, **summarise(traces)}
+            metrics_cache[last] = (_now(), payload)
+            return payload
 
     @app.get("/api/examples")
     def examples() -> list[str]:
@@ -87,11 +107,14 @@ def create_app(pipeline: RagPipeline, tracer: Tracer | None = None) -> FastAPI:
             raise HTTPException(status_code=422, detail="question is empty")
 
         def events() -> Iterator[str]:
+            stream = traced_stream(pipeline, tracer, question, req.k, req.mode, source="api")
             try:
-                for ev in traced_stream(pipeline, tracer, question, req.k, req.mode, source="api"):
+                for ev in stream:
                     yield _sse(ev)
             except Exception as e:  # never leave the client hanging on a half-open stream
                 yield _sse({"type": "error", "message": f"internal error: {type(e).__name__}"})
+            finally:
+                stream.close()  # a disconnect closes this generator; make the trace see it now, not at GC
 
         return StreamingResponse(
             events(),
@@ -114,5 +137,6 @@ def app_from_settings(config: str = "citerag.toml") -> FastAPI:
     from .engine import load_pipeline
 
     settings = Settings.load(config)
-    tracer = Tracer(settings.trace_path, enabled=settings.tracing_enabled, pricing=settings.pricing)
+    tracer = Tracer(settings.trace_path, enabled=settings.tracing_enabled, pricing=settings.pricing,
+                  max_file_mb=settings.trace_max_file_mb, retention_days=settings.trace_retention_days)
     return create_app(load_pipeline(settings), tracer)

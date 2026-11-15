@@ -179,8 +179,10 @@ function metricRows(m) {
     ["requests", `${m.requests} (${m.asks} asks, ${m.searches} searches)`],
     ["abstain rate", pct(m.abstain_rate)],
     ["error rate", pct(m.error_rate)],
-    ["total p50 / p95", lat("total")],
-    ["generate p50 / p95", lat("generate")],
+    ["cancel rate", pct(m.cancel_rate)],
+    ["answer total p50 / p95", lat("total")],
+    ["answer generate p50 / p95", lat("generate")],
+    ["search p50 / p95", `${ms(m.search_latency_ms.p50)} / ${ms(m.search_latency_ms.p95)}`],
     ["citations per answer", m.citations_per_answer === null ? "n/a" : m.citations_per_answer.toFixed(1)],
     ["estimated cost", cost],
   ];

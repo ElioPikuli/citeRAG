@@ -25,10 +25,21 @@ def cmd_ingest(args) -> int:
     return 0
 
 
+def _positive_int(text: str) -> int:
+    try:
+        value = int(text)
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"not an integer: {text!r}") from None
+    if value < 1:
+        raise argparse.ArgumentTypeError("must be a positive integer")
+    return value
+
+
 def _tracer(settings: Settings):
     from .tracing import Tracer
 
-    return Tracer(settings.trace_path, enabled=settings.tracing_enabled, pricing=settings.pricing)
+    return Tracer(settings.trace_path, enabled=settings.tracing_enabled, pricing=settings.pricing,
+                  max_file_mb=settings.trace_max_file_mb, retention_days=settings.trace_retention_days)
 
 
 def cmd_search(args) -> int:
@@ -297,7 +308,7 @@ def main(argv: list[str] | None = None) -> int:
     s.set_defaults(fn=cmd_eval_answers)
 
     s = sub.add_parser("traces", help="summarise recent request traces (latency, cost, errors)")
-    s.add_argument("--last", type=int, default=200, help="newest N traces (default 200)")
+    s.add_argument("--last", type=_positive_int, default=200, help="newest N traces (default 200)")
     s.add_argument("--json", action="store_true")
     s.set_defaults(fn=cmd_traces)
 

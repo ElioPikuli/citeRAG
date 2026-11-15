@@ -2,12 +2,19 @@
 
 from __future__ import annotations
 
+import os
 import tomllib
 from dataclasses import dataclass, field
 from pathlib import Path
 
 DEFAULT_INCLUDE = (".md", ".txt", ".html", ".py", ".js", ".ts", ".css", ".json", ".toml")
 DEFAULT_EXCLUDE = ("node_modules", ".git", ".venv", "__pycache__", "package-lock.json")
+
+
+def _env_flag(name: str, default: bool) -> bool:
+    """CITERAG_TRACING=0|1 overrides the file, so a deployment can switch tracing without editing the toml."""
+    value = os.environ.get(name, "").strip()
+    return {"0": False, "1": True}.get(value, default)
 
 
 @dataclass
@@ -34,6 +41,8 @@ class Settings:
     ollama_url: str = "http://localhost:11434"
     tracing_enabled: bool = True
     trace_dir: str = "traces"
+    trace_max_file_mb: float = 50
+    trace_retention_days: int = 14
     pricing: dict = field(default_factory=dict)  # model -> {input, output} in USD per million tokens
 
     @property
@@ -76,7 +85,9 @@ class Settings:
             provider=gen.get("provider", d.provider),
             ollama_model=gen.get("ollama_model", d.ollama_model),
             ollama_url=gen.get("ollama_url", d.ollama_url),
-            tracing_enabled=tracing.get("enabled", d.tracing_enabled),
+            tracing_enabled=_env_flag("CITERAG_TRACING", tracing.get("enabled", d.tracing_enabled)),
             trace_dir=tracing.get("dir", d.trace_dir),
+            trace_max_file_mb=tracing.get("max_file_mb", d.trace_max_file_mb),
+            trace_retention_days=tracing.get("retention_days", d.trace_retention_days),
             pricing=dict(data.get("pricing", {})),
         )

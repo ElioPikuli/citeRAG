@@ -149,6 +149,58 @@ JSON, and the web UI shows it in a Metrics panel.
   after 14 days (`[tracing]` in citerag.toml). `CITERAG_TRACING=0` turns tracing off. On Render's free tier the
   disk is wiped on every deploy or spin-down, so the hosted demo's metrics only cover requests since it last woke.
 
+### Use it from Claude Desktop / Claude Code (MCP)
+
+`citerag mcp` serves the index over stdio as a [Model Context Protocol](https://modelcontextprotocol.io) server,
+so Claude Desktop, Claude Code or Cursor can search your projects and cite them. It uses the official MCP SDK, an
+optional extra:
+
+```bash
+.venv/bin/pip install -e ".[mcp]"
+```
+
+Three tools, all read-only:
+
+| Tool | What it returns | Model call? |
+|---|---|---|
+| `search_sources(query, k=5, mode="hybrid")` | ranked chunks with file, line range, heading path, score and text | none: free, no API key |
+| `get_chunk(file, start_line, end_line)` | the exact text of those lines (at most 400), as indexed, so line numbers match citations | none: free, no API key |
+| `ask(question)` | an answer with inline `[n]` markers, a matching citation list, and the answer split into cited segments | the chosen generator: extractive by default, local Ollama if configured |
+
+With `search_sources` and `get_chunk`, your client model does the reasoning and citeRAG only retrieves, so it needs
+no API key and costs nothing extra. `get_chunk` only reads files that are in the index and inside their source
+folder: `../`, absolute paths and symlinks pointing outside are rejected. Errors come back as structured data
+(`{"error": {"code", "message"}}`) with the tool error flag set, never as a traceback. Every call is traced with
+`source: "mcp"`.
+
+**Claude Code** (replace the paths with your clone's absolute path):
+
+```bash
+claude mcp add citerag -- /ABSOLUTE/PATH/citeRAG/.venv/bin/citerag --config /ABSOLUTE/PATH/citeRAG/citerag.toml mcp
+```
+
+**Claude Desktop** (`claude_desktop_config.json`; Cursor's `mcp.json` uses the same shape):
+
+```json
+{
+  "mcpServers": {
+    "citerag": {
+      "command": "/ABSOLUTE/PATH/citeRAG/.venv/bin/citerag",
+      "args": ["--config", "/ABSOLUTE/PATH/citeRAG/citerag.toml", "mcp"]
+    }
+  }
+}
+```
+
+No `cwd` is needed: every path in citerag.toml resolves relative to the config file, and I tested the server
+launched from an unrelated directory. Run `citerag ingest` first.
+
+`ask` answers with the extractive generator unless you choose another one. To use a local model, add
+`"env": {"CITERAG_GENERATOR": "ollama"}` and keep Ollama running. Unlike `citerag serve`, the MCP server never
+switches to Claude just because `ANTHROPIC_API_KEY` happens to be in its environment: a client may auto-approve
+read-only tools, so a paid `ask` needs `CITERAG_GENERATOR=claude` or `provider = "claude"`. The server prints the
+generator it chose to stderr at startup.
+
 ## Run with Docker / host it for free
 
 The [Dockerfile](Dockerfile) builds everything into the image (corpus, embedding model, index), so the container
@@ -359,12 +411,14 @@ Caveats:
 
 ## Testing
 
-247 tests, all offline (no Ollama, network or API key), ~16 s. They cover the Ollama generator against an
+309 tests, all offline (no Ollama, network or API key), ~18 s. They cover the Ollama generator against an
 in-process fake server (citation-marker parsing under any fragmenting, invalid markers, source-block injection,
 unreachable or broken servers) and the answer eval (metric arithmetic on hand-built answers, judge JSON
 validation and retry, the sanity check, a CLI run with fakes) and tracing (every request outcome including
 crashes and disconnects, a failing trace write, cost rules, aggregation maths, bounded reads of large trace
-files). The original 64 cover the tokenizer, line-preserving HTML conversion, chunk boundaries and line numbers,
+files) and the MCP server (tool results and errors, path-traversal and symlink rejection, generator choice, a real
+stdio session checking that stdout carries only protocol messages). The original 64 cover the tokenizer,
+line-preserving HTML conversion, chunk boundaries and line numbers,
 BM25 against hand-computed scores, RRF and MMR, index round-trip and incremental rebuilds, the Claude generator
 against a fake client (exact request shape: `search_result` blocks, adaptive thinking, effort, refusal fallback;
 mapping of `citations_delta` events to chunk indices; refusal and API errors), the abstain gate, the SSE API

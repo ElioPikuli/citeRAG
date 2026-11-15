@@ -62,10 +62,11 @@ def test_run_item_segments_and_citations():
     it = ae.run_item(FakePipeline(events), ITEM)
     assert it["segments"] == [
         {"text": "Days round up", "hits": [0]},
-        {"text": "Also", "hits": [0]},  # "." + " " before the 2nd cite has no letter/digit: dropped
+        {"text": "Also", "hits": [2, 1, 0]},  # "." + " " before the 2nd cite is an orphan: merged forward
         {"text": "tail text", "hits": []},
     ]
-    assert it["cited"] == [0, 2, 1]  # the dropped gap still cites; out-of-range hit 7 is ignored
+    assert it["orphan_cites"] == 1
+    assert it["cited"] == [0, 2, 1]  # out-of-range hit 7 is ignored
     assert it["cited_files"] == ["a.md", "c.md", "b.md"]
     assert it["source_texts"] == {0: "text a", 1: "text b", 2: "chunk text"}
     assert (it["markers"], it["invalid_markers"]) == (4, 1)
@@ -73,6 +74,49 @@ def test_run_item_segments_and_citations():
     assert (it["generator"], it["model"], it["generation_ms"], it["retrieval_ms"]) == ("fake", "m1", 7.0, 3.0)
     assert it["answerable"] and not it["abstained"] and it["error"] is None
     assert "hits" not in it and it["latency_ms"] >= 0
+
+
+def test_orphan_leading_marker_goes_to_next_segment():
+    events = [cite(2), tok(" When storage is blocked "), cite(1), tok("."), done()]
+    it = ae.run_item(FakePipeline(events), ITEM)
+    assert it["segments"] == [{"text": "When storage is blocked", "hits": [2, 1]}]
+    assert it["orphan_cites"] == 1 and it["cited"] == [2, 1]
+
+
+def test_orphan_trailing_marker_goes_to_previous_segment():
+    events = [tok("Fact one"), cite(0), tok("."), tok(" "), cite(1), done()]
+    it = ae.run_item(FakePipeline(events), ITEM)
+    assert it["segments"] == [{"text": "Fact one", "hits": [0, 1]}]
+    assert it["orphan_cites"] == 1
+
+
+def test_orphan_followed_by_uncited_trailing_text():
+    events = [tok("Fact one"), cite(0), cite(2), tok(" tail words"), done()]
+    it = ae.run_item(FakePipeline(events), ITEM)
+    assert it["segments"] == [{"text": "Fact one", "hits": [0]}, {"text": "tail words", "hits": [2]}]
+    assert it["orphan_cites"] == 1
+
+
+def test_orphans_without_any_segment_stay_only_in_cited():
+    it = ae.run_item(FakePipeline([cite(1), tok(" "), cite(0), done()]), ITEM)
+    assert it["segments"] == [] and it["cited"] == [1, 0] and it["orphan_cites"] == 2
+
+
+def test_orphan_dedup_keeps_order():
+    it = ae.run_item(FakePipeline([cite(1), cite(1, 0), tok("x"), cite(0), done()]), ITEM)
+    assert it["segments"] == [{"text": "x", "hits": [1, 0]}]
+
+
+def test_stop_reason_recorded_and_truncated_counted():
+    it = ae.run_item(FakePipeline([tok("a"), cite(0), done(stop_reason="length")]), ITEM)
+    assert it["stop_reason"] == "length"
+    ok = ae.run_item(FakePipeline([tok("a"), cite(0), done(stop_reason="stop")]), ITEM)
+    a = ae.aggregate([it, ok])
+    assert a["truncated"] == 1 and a["orphan_cites"] == 0
+
+
+def test_declined_accepts_curly_apostrophe():
+    assert ae.run_item(FakePipeline([tok("The sources don\u2019t cover that."), done()]), ITEM)["model_declined"]
 
 
 def test_run_item_cited_order_and_dedup():
@@ -157,14 +201,6 @@ def test_invalid_marker_rate():
     assert ae.aggregate([mk(["a.md"], markers=0, invalid=0)])["invalid_marker_rate"] is None
 
 
-def test_latency_covers_all_items_except_errors():
-    items = [mk(["a.md"], latency=float(i)) for i in range(1, 20)]
-    items.append(mk([], answerable=False, abstained=True, latency=20.0))
-    items.append(mk([], error="x", latency=9999.0))
-    a = ae.aggregate(items)
-    assert (a["latency_p50_ms"], a["latency_p95_ms"]) == (10, 19)
-
-
 def test_unanswerable_block():
     items = [mk(["a.md"]), mk([], answerable=False, abstained=True), mk([], answerable=False, abstained=True),
              mk(["a.md"], answerable=False)]
@@ -193,7 +229,7 @@ def test_aggregate_judge_micro_macro():
     assert a["relevance_mean"] == pytest.approx(2.0)
     assert a["claims"] == 6
     assert (a["judge_calls"], a["judge_errors"]) == (7, 2)  # 3 + 2 + 2 calls
-    assert a["uncited_segments"] == 2
+    assert a["uncited_segments"] == 2 and a["segments_total"] == 2  # only the item segments count; judged() puts none there
 
 
 def test_aggregate_judge_call_count():
@@ -401,11 +437,12 @@ def test_cli_extractive_smoke(tmp_path, capsys):
     assert rc == 0
     assert "| questions | generator | answered |" in cap.out and "extractive" in cap.out
     assert "abstain gate: answered 1/1 answerable, refused 1/1 unanswerable" in cap.out
-    assert "model declined (heuristic):" in cap.out and "judge sanity" not in cap.out
+    assert "model declined (English heuristic):" in cap.out and "judge sanity" not in cap.out
     assert f"wrote {out}" in cap.out
     assert "[1/2] extractive" in cap.err and "[2/2]" in cap.err
     data = json.loads(out.read_text(encoding="utf-8"))
-    assert set(data) == {"date", "git_commit", "config", "results", "judge_sanity", "items"}
+    assert set(data) == {"date", "git_commit", "git_dirty", "config", "results", "judge_sanity", "items"}
+    assert data["config"]["embedder"] == "hashing:256" and data["config"]["generation"] is None
     assert data["config"]["limit"] == 1 and data["config"]["judge"] is None
     assert data["config"]["generators"] == {"extractive": None}
     assert len(data["items"]["extractive"]) == 2  # 1 answerable (limit) + the unanswerable one
@@ -486,15 +523,19 @@ def test_cli_ollama_generator_and_judge(tmp_path, capsys, fake_ollama):
     cfg = make_project(tmp_path, f'ollama_url = "{fake_ollama.url}"\nollama_model = "qwen2.5:3b"\n')
     out = tmp_path / "answers.json"
     rc = cli.main(["--config", str(cfg), "eval-answers", "--golden", str(tmp_path / "golden.jsonl"),
-                   "--generator", "extractive", "--generator", "ollama", "--judge", "ollama", "--out", str(out)])
+                   "--generator", "extractive", "--generator", "ollama", "--judge", "ollama", "--out", str(out),
+                   "--sanity", str(SANITY)])
     cap = capsys.readouterr()
     assert rc == 0, cap.err
     assert "faithfulness | relevance" in cap.out
     assert f"judge (qwen2.5:3b, prompts v{JUDGE_PROMPT_VERSION})" in cap.out
-    assert "judge errors 0/" in cap.out
+    assert "judge errors 0/" in cap.out and "(not judged)" in cap.out
     assert "judge sanity: caught 6/8 bad answers, 2 false alarms on 2 good ones" in cap.out
     data = json.loads(out.read_text(encoding="utf-8"))
-    assert data["config"]["judge"] == {"model": "qwen2.5:3b", "prompt_version": JUDGE_PROMPT_VERSION}
+    assert data["config"]["judge"] == {"model": "qwen2.5:3b", "prompt_version": JUDGE_PROMPT_VERSION,
+                                       "max_tokens": ae.JUDGE_MAX_TOKENS}
+    assert data["config"]["generation"] == {"temperature": 0.1, "max_tokens": 1024}
+    assert "partial" not in data
     assert data["config"]["generators"] == {"extractive": None, "ollama": "qwen2.5:3b"}
     assert data["judge_sanity"]["caught"] == 6  # the fake flags every claim set; relevance is always 3
     ollama_items = data["items"]["ollama"]
@@ -567,3 +608,192 @@ def test_extractive_header_is_not_judged(pipeline):
     item = ae.run_item(pipeline, GoldenItem("Are partial days billed as full days?", ["proj/calc.js"], "natural"))
     assert item["segments"] and item["text"].startswith(EXTRACTIVE_HEADER)
     assert not any("offline mode" in s["text"] for s in item["segments"])
+
+
+# ---- review fixes -----------------------------------------------------------------------------------
+
+class RecordingJudge:
+    def __init__(self, error_on=None):
+        self.f_calls: list[tuple[str, list[str]]] = []
+        self.r_calls: list[tuple[str, str]] = []
+
+    def faithfulness(self, statement, sources):
+        self.f_calls.append((statement, list(sources)))
+        return {"claims": [{"claim": "c", "supported": True}]}
+
+    def relevance(self, question, answer):
+        self.r_calls.append((question, answer))
+        return {"score": 2, "reason": "r"}
+
+
+def test_judge_item_calls_and_shape():
+    it = mk(["a.md", "b.md"], segments=[
+        {"text": "first", "hits": [0]}, {"text": "second", "hits": [1, 0]}, {"text": "no cite", "hits": []}])
+    it["text"] = ae.EXTRACTIVE_HEADER + "first second no cite"
+    j = RecordingJudge()
+    ae.judge_item(j, it)
+    assert j.f_calls == [("first", ["s0"]), ("second", ["s1", "s0"])]
+    assert j.r_calls == [("q", "first second no cite")]  # header removed
+    assert it["judge"] == {
+        "segments": [{"text": "first", "hits": [0], "claims": [{"claim": "c", "supported": True}]},
+                     {"text": "second", "hits": [1, 0], "claims": [{"claim": "c", "supported": True}]}],
+        "relevance": {"score": 2, "reason": "r"}}
+
+
+def test_judge_item_skips_abstained_and_errored():
+    j = RecordingJudge()
+    for it in (mk(["a.md"], abstained=True, segments=[{"text": "x", "hits": [0]}]),
+               mk(["a.md"], error="boom", segments=[{"text": "x", "hits": [0]}])):
+        ae.judge_item(j, it)
+        assert "judge" not in it
+    assert j.f_calls == [] and j.r_calls == []
+
+
+def test_judge_sanity_relevance_error_is_never_caught_or_false_alarm():
+    class RelError(ScriptedJudge):
+        def relevance(self, question, answer):
+            return {"judge_error": "bad", "raw": []}
+
+    script = [([False], 3)] * 10  # every row has an unsupported claim, but relevance errored
+    res = ae.judge_sanity(RelError(script), SANITY)
+    assert (res["caught"], res["false_alarms"], res["judge_errors"]) == (0, 0, 10)
+    assert not any(r["flagged"] for r in res["rows"])
+
+
+def test_check_ollama_models_null(fake_ollama):
+    class H(BaseHTTPRequestHandler):
+        def do_GET(self):
+            body = b'{"models": null}'
+            self.send_response(200)
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, *a):
+            pass
+
+    srv = ThreadingHTTPServer(("127.0.0.1", 0), H)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    try:
+        msg = ae.check_ollama(f"http://127.0.0.1:{srv.server_address[1]}", ["m"])
+    finally:
+        srv.shutdown()
+        srv.server_close()
+    assert "ollama pull m" in msg
+
+
+def test_parse_faithfulness_blank_claim_and_cap():
+    with pytest.raises(ae.JudgeParseError):
+        ae.parse_faithfulness('{"claims": [{"claim": "  ", "supported": true}]}')
+    raw = json.dumps({"claims": [{"claim": f"c{i}", "supported": True} for i in range(9)]})
+    assert [c["claim"] for c in ae.parse_faithfulness(raw)] == [f"c{i}" for i in range(6)]
+
+
+def test_summarise_skips_slice_without_answerable_items():
+    items = [mk(["a.md"]), mk([], answerable=False, abstained=True, slice="unanswerable")]
+    out = ae.summarise(items, {})
+    assert list(out["slices"]) == ["natural"] and out["unanswerable"]["n"] == 1
+
+
+def test_default_results_path_never_overwrites(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    first = ae.default_results_path()
+    ae.write_results(first, {})
+    second = ae.default_results_path()
+    assert second.name == first.name.replace(".json", "-2.json")
+    ae.write_results(second, {})
+    assert ae.default_results_path().name.endswith("-3.json")
+
+
+def test_git_dirty_is_bool_or_none():
+    assert ae.git_dirty() in (True, False, None)
+
+
+class FakeOpener:
+    """Stands in for urllib's opener: raises or returns a scripted reply."""
+
+    def __init__(self, outcome):
+        self.outcome = outcome
+
+    def open(self, req, timeout=None):
+        if isinstance(self.outcome, Exception):
+            raise self.outcome
+        return __import__("io").BytesIO(self.outcome)
+
+
+def patch_opener(monkeypatch, *outcomes):
+    import urllib.request
+    seq = list(outcomes)
+    monkeypatch.setattr(urllib.request, "build_opener", lambda *a: FakeOpener(seq.pop(0) if len(seq) > 1 else seq[0]))
+
+
+def test_http_chat_model_missing_is_unavailable(monkeypatch):
+    import io
+    import urllib.error
+    err = urllib.error.HTTPError("u", 404, "nf", {}, io.BytesIO(b'{"error": "model \'m\' not found"}'))
+    patch_opener(monkeypatch, err)
+    with pytest.raises(ae.JudgeUnavailable, match="ollama pull m"):
+        ae.OllamaJudge(model="m").relevance("q", "a")
+
+
+def test_http_chat_connection_refused_is_unavailable(monkeypatch):
+    import urllib.error
+    patch_opener(monkeypatch, urllib.error.URLError(ConnectionRefusedError(61, "refused")))
+    with pytest.raises(ae.JudgeUnavailable, match="ollama serve"):
+        ae.OllamaJudge(model="m").relevance("q", "a")
+
+
+def test_http_chat_timeout_is_a_judge_error_not_an_abort(monkeypatch):
+    patch_opener(monkeypatch, TimeoutError())
+    res = ae.OllamaJudge(model="m").relevance("q", "a")
+    assert res["judge_error"] == "timeout"
+    res = ae.OllamaJudge(model="m").faithfulness("s", ["src"])
+    assert res["judge_error"] == "timeout"
+
+
+def test_timeout_on_retry_keeps_first_raw():
+    chat = ScriptedChat("{bad", ae.JudgeTimeout("slow"))
+    res = ae.OllamaJudge(model="m", chat=chat).faithfulness("s", ["src"])
+    assert res == {"judge_error": "timeout", "raw": ["{bad"]}
+
+
+def test_http_chat_malformed_payload_is_retried(monkeypatch):
+    good = json.dumps({"message": {"content": '{"reason": "r", "verdict": "answers"}'}}).encode()
+    patch_opener(monkeypatch, b'{"nope": 1}', good)
+    assert ae.OllamaJudge(model="m").relevance("q", "a")["score"] == 3
+
+
+def test_cli_sanity_file_missing_or_malformed(tmp_path, capsys, fake_ollama):
+    cfg = make_project(tmp_path, f'ollama_url = "{fake_ollama.url}"\n')
+    args = ["--config", str(cfg), "eval-answers", "--golden", str(tmp_path / "golden.jsonl"),
+            "--judge", "ollama", "--no-write"]
+    capsys.readouterr()
+    assert cli.main(args) == 2  # no judge_sanity.jsonl next to the golden file
+    err = capsys.readouterr().err
+    assert err.startswith("error:") and "Traceback" not in err
+    bad = tmp_path / "bad.jsonl"
+    bad.write_text("{not json\n", encoding="utf-8")
+    assert cli.main([*args, "--sanity", str(bad)]) == 2
+    assert "malformed" in capsys.readouterr().err
+
+
+def test_cli_judge_unavailable_mid_run_writes_partial(tmp_path, capsys, fake_ollama, monkeypatch):
+    cfg = make_project(tmp_path, f'ollama_url = "{fake_ollama.url}"\n')
+    calls = {"n": 0}
+    real = ae.OllamaJudge.relevance
+
+    def flaky(self, q, a):
+        calls["n"] += 1
+        if calls["n"] == 2:
+            raise ae.JudgeUnavailable("went away")
+        return real(self, q, a)
+
+    monkeypatch.setattr(ae.OllamaJudge, "relevance", flaky)
+    out = tmp_path / "p.json"
+    rc = cli.main(["--config", str(cfg), "eval-answers", "--golden", str(tmp_path / "golden.jsonl"),
+                   "--judge", "ollama", "--sanity", str(SANITY), "--out", str(out)])
+    cap = capsys.readouterr()
+    assert rc == 1 and "went away" in cap.err and f"wrote {out}" in cap.out
+    data = json.loads(out.read_text(encoding="utf-8"))
+    assert data["partial"] is True and data["judge_sanity"] is None
+    assert len(data["items"]["extractive"]) == 1  # the first answerable item finished; the second was cut off

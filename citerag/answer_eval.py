@@ -36,8 +36,8 @@ from .judge_prompts import (
 # Heuristic, not ground truth: phrases a model uses when it says the sources don't cover the question. It misses
 # paraphrases and can match an answer that quotes such a phrase from a source, so treat counts as indicative.
 DECLINED = re.compile(
-    r"don't cover|do not cover|doesn't cover|does not cover|not covered|aren't covered|no information|"
-    r"couldn't find|could not find|not mentioned|not (?:provided|included|detailed) in",
+    r"don['’]t cover|do not cover|doesn['’]t cover|does not cover|not covered|aren['’]t covered|no information|"
+    r"couldn['’]t find|could not find|not mentioned|not (?:provided|included|detailed) in",
     re.IGNORECASE,
 )
 
@@ -48,13 +48,21 @@ def _has_content(text: str) -> bool:
     return any(c.isalnum() for c in text)
 
 
+def _merge(first: list[int], more: list[int]) -> list[int]:
+    """`first` then the new entries of `more`: dedup, order kept."""
+    return list(dict.fromkeys([*first, *more]))
+
+
 def run_item(pipeline, item: GoldenItem) -> dict:
     """Run one question through retrieve + generate and record everything the metrics need.
 
     Consumes the events itself (not `pipeline.answer`) because the judge needs to know which text each citation
-    covers. A `cite` event closes a segment: the text streamed since the previous cite, with those hits. A gap
-    with no letter or digit (whitespace, bullets, punctuation) is dropped; trailing text after the last cite
-    becomes a segment with `hits: []`. `source_texts` maps each cited hit index to its chunk text, for the judge.
+    covers. A `cite` event closes a segment: the text streamed since the previous cite, with those hits. A cite
+    whose preceding text has no letter or digit (e.g. the model wrote "[6] text [3]" or "text [1]. [2]") is an
+    orphan: its hits are carried into the next segment with content, or into the previous segment if none
+    follows, so they are judged rather than silently dropped (counted in `orphan_cites`). If there is no segment
+    at all they stay only in `cited`. Trailing text after the last cite becomes a segment with `hits: []` (or
+    the pending orphan hits). `source_texts` maps each cited hit index to its chunk text, for the judge.
     """
     t0 = time.perf_counter()
     hits, gate = pipeline.retrieve(item.question)
@@ -62,6 +70,8 @@ def run_item(pipeline, item: GoldenItem) -> dict:
     segments: list[dict] = []
     cited: list[int] = []
     pending = ""
+    orphans: list[int] = []
+    orphan_cites = 0
     done: dict = {}
     error: str | None = None
     for ev in pipeline.generate(item.question, hits, gate):
@@ -75,7 +85,11 @@ def run_item(pipeline, item: GoldenItem) -> dict:
             # as unsupported (measured in the first full run).
             pending = pending.replace(EXTRACTIVE_HEADER, "")
             if _has_content(pending) and valid:
-                segments.append({"text": pending.strip(), "hits": valid})
+                segments.append({"text": pending.strip(), "hits": _merge(orphans, valid)})
+                orphans = []
+            elif valid:
+                orphans = _merge(orphans, valid)
+                orphan_cites += 1
             pending = ""
             cited.extend(i for i in valid if i not in cited)
         elif kind == "done":
@@ -83,7 +97,9 @@ def run_item(pipeline, item: GoldenItem) -> dict:
         elif kind == "error":
             error = ev["message"]
     if _has_content(pending):
-        segments.append({"text": pending.strip(), "hits": []})
+        segments.append({"text": pending.strip(), "hits": orphans})
+    elif orphans and segments:
+        segments[-1]["hits"] = _merge(segments[-1]["hits"], orphans)
     latency_ms = round((time.perf_counter() - t0) * 1000, 1)
 
     text = "".join(tokens)
@@ -101,8 +117,10 @@ def run_item(pipeline, item: GoldenItem) -> dict:
         "text": text,
         "segments": segments,
         "cited": cited,
+        "orphan_cites": orphan_cites,
         "cited_files": [hits[i].chunk.source for i in cited],
         "source_texts": {i: hits[i].chunk.text for i in cited},
+        "stop_reason": done.get("stop_reason"),
         "markers": done.get("markers"),
         "invalid_markers": done.get("invalid_markers"),
         "latency_ms": latency_ms,
@@ -142,6 +160,8 @@ def aggregate(items: list[dict]) -> dict:
     Over the answerable items:
       n, answered (not abstained, no error), abstained, errors, model_declined (heuristic) are counts.
       empty_answers       answered items whose text has no letter or digit (e.g. the model wrote only "[6][1]").
+      truncated           answered items whose stop_reason is "length" (the output token cap cut the answer).
+      orphan_cites        cite events with no text of their own in answered items (see run_item).
       citation_coverage   answered items with >= 1 valid citation and some text / answered; an empty answer
                           with markers is not "cited". None if nothing was answered.
       citation_precision  micro: all cited chunks of answered items pooled, the share whose source file is in
@@ -158,7 +178,7 @@ def aggregate(items: list[dict]) -> dict:
       relevance_mean      mean relevance score (1-3) over items that have one.
       claims              total judged claims.
       judge_calls, judge_errors  judge calls made and how many ended as judge_error (segments + relevance).
-      uncited_segments    segments without a citation in answered items; they are not judged.
+      segments_total, uncited_segments  all segments of answered items, and those without a citation (not judged).
     `unanswerable` is a separate block: n, abstained (the gate refused), answered.
     """
     answerable = [it for it in items if it["answerable"]]
@@ -170,6 +190,8 @@ def aggregate(items: list[dict]) -> dict:
         "errors": sum(bool(it.get("error")) for it in answerable),
         "model_declined": sum(it["model_declined"] for it in answered),
         "empty_answers": sum(_is_empty(it) for it in answered),
+        "truncated": sum(it.get("stop_reason") == "length" for it in answered),
+        "orphan_cites": sum(it.get("orphan_cites", 0) for it in answered),
     }
     with_cites = [it for it in answered if it["cited"] and not _is_empty(it)]
     out["citation_coverage"] = _ratio(len(with_cites), len(answered))
@@ -230,6 +252,7 @@ def _judge_aggregate(answered: list[dict]) -> dict:
         "claims": claims,
         "judge_calls": calls,
         "judge_errors": errors,
+        "segments_total": sum(len(it["segments"]) for it in answered),
         "uncited_segments": sum(1 for it in answered for seg in it["segments"] if not seg["hits"]),
     }
 
@@ -240,6 +263,8 @@ def summarise(items: list[dict], gate: dict) -> dict:
     unanswerable = overall.pop("unanswerable")
     slices: dict[str, dict] = {}
     for name in sorted({it["slice"] for it in items}):
+        if not any(it["slice"] == name and it["answerable"] for it in items):
+            continue  # an all-unanswerable slice has no answer metrics
         s = aggregate([it for it in items if it["slice"] == name])
         s.pop("unanswerable")
         slices[name] = s
@@ -250,6 +275,10 @@ def summarise(items: list[dict], gate: dict) -> dict:
 
 class JudgeUnavailable(Exception):
     """The judge model can't be reached or isn't installed. Not retried: it aborts the run."""
+
+
+class JudgeTimeout(Exception):
+    """One judge call timed out. Becomes that call's judge_error; the run goes on."""
 
 
 class JudgeParseError(ValueError):
@@ -265,8 +294,12 @@ def neutralise(s: str) -> str:
     return _JUDGE_TAG.sub("‹", s)
 
 
+MAX_CLAIMS = 6
+
+
 def parse_faithfulness(raw: str) -> list[dict]:
-    """Validate a faithfulness reply: a non-empty list of {"claim": str, "supported": bool}."""
+    """Validate a faithfulness reply: a non-empty list of {"claim": non-blank str, "supported": bool}. The prompt
+    asks for at most 6 claims; a longer list keeps the first 6 so one chatty reply doesn't skew the pooled ratio."""
     try:
         data = json.loads(raw)
     except (ValueError, TypeError):
@@ -276,10 +309,11 @@ def parse_faithfulness(raw: str) -> list[dict]:
         raise JudgeParseError('"claims" must be a non-empty list')
     out = []
     for c in claims:
-        if not isinstance(c, dict) or not isinstance(c.get("claim"), str) or not isinstance(c.get("supported"), bool):
+        if (not isinstance(c, dict) or not isinstance(c.get("claim"), str) or not c["claim"].strip()
+                or not isinstance(c.get("supported"), bool)):
             raise JudgeParseError('each claim must be {"claim": string, "supported": true or false}')
         out.append({"claim": c["claim"], "supported": c["supported"]})
-    return out
+    return out[:MAX_CLAIMS]
 
 
 def parse_relevance(raw: str) -> dict:
@@ -331,13 +365,13 @@ class OllamaJudge:
         except urllib.error.HTTPError as e:
             raise JudgeUnavailable(self._http_message(e)) from None
         except TimeoutError:
-            raise JudgeUnavailable(f"Ollama didn't respond within {self.timeout:.0f}s.") from None
+            raise JudgeTimeout(f"Ollama didn't respond within {self.timeout:.0f}s.") from None
         except (ValueError, http.client.HTTPException) as e:
             raise JudgeUnavailable(f"Couldn't talk to Ollama at {self.url}: check `ollama_url` in citerag.toml "
                                    f"({type(e).__name__}).") from None
         except (urllib.error.URLError, OSError) as e:
             if isinstance(getattr(e, "reason", None), TimeoutError):
-                raise JudgeUnavailable(f"Ollama didn't respond within {self.timeout:.0f}s.") from None
+                raise JudgeTimeout(f"Ollama didn't respond within {self.timeout:.0f}s.") from None
             raise JudgeUnavailable(f"Could not reach Ollama at {self.url}. Start it with `ollama serve`, "
                                    f"then pull a model with `ollama pull {self.model}`.") from None
         try:
@@ -368,15 +402,22 @@ class OllamaJudge:
 
     def _ask(self, messages: list[dict], schema: dict, parse: Callable[[str], object]) -> dict:
         """One call plus one retry that shows the model its bad reply and why it failed. Never raises on a bad
-        reply: returns {"judge_error", "raw": [first, second]} so the item is kept and visible."""
-        first = self.chat(messages, schema)
+        reply or a timed-out call: returns {"judge_error", "raw": [replies so far]} so the item is kept and
+        visible. Only an unreachable server or a missing model raises (JudgeUnavailable)."""
+        try:
+            first = self.chat(messages, schema)
+        except JudgeTimeout:
+            return {"judge_error": "timeout", "raw": []}
         try:
             return {"value": parse(first)}
         except JudgeParseError as e:
             reason = str(e)
         retry = [*messages, {"role": "assistant", "content": first},
                  {"role": "user", "content": RETRY_MESSAGE.format(error=reason)}]
-        second = self.chat(retry, schema)
+        try:
+            second = self.chat(retry, schema)
+        except JudgeTimeout:
+            return {"judge_error": "timeout", "raw": [first]}
         try:
             return {"value": parse(second)}
         except JudgeParseError as e:
@@ -405,7 +446,8 @@ class OllamaJudge:
 
 def judge_item(judge, item: dict) -> None:
     """Judge an answered item in place. Faithfulness per cited segment against exactly its cited chunks;
-    relevance on the whole answer. Uncited segments are not judged. Abstained/errored items are left alone."""
+    relevance on the whole answer (without the extractive header, which is a label). Uncited segments are not
+    judged. Abstained/errored items are left alone."""
     if not _is_answered(item):
         return
     segments = []
@@ -414,7 +456,37 @@ def judge_item(judge, item: dict) -> None:
             continue
         res = judge.faithfulness(seg["text"], [item["source_texts"][i] for i in seg["hits"]])
         segments.append({"text": seg["text"], "hits": seg["hits"], **res})
-    item["judge"] = {"segments": segments, "relevance": judge.relevance(item["question"], item["text"])}
+    item["judge"] = {"segments": segments, "relevance": judge.relevance(item["question"], item["text"].replace(EXTRACTIVE_HEADER, ""))}
+
+
+_EXPECTS = ("unfaithful", "irrelevant", "good")
+
+
+def load_sanity(path: str | Path) -> list[dict]:
+    """Read and validate the sanity fixture before any judge call. Raises ValueError with a readable message."""
+    try:
+        text = Path(path).read_text(encoding="utf-8")
+    except OSError as e:
+        raise ValueError(f"can't read judge sanity file {path}: {e.strerror or e}") from None
+    rows = []
+    for n, line in enumerate(text.splitlines(), 1):
+        if not line.strip():
+            continue
+        try:
+            row = json.loads(line)
+            ok = (isinstance(row, dict) and row.get("expect") in _EXPECTS and isinstance(row.get("question"), str)
+                  and isinstance(row.get("segments"), list) and row["segments"]
+                  and all(isinstance(s, dict) and isinstance(s.get("text"), str) and isinstance(s.get("sources"), list)
+                          and all(isinstance(src, dict) and isinstance(src.get("text"), str) for src in s["sources"])
+                          for s in row["segments"]))
+        except ValueError:
+            ok = False
+        if not ok:
+            raise ValueError(f"malformed judge sanity file {path}, line {n}")
+        rows.append(row)
+    if not rows:
+        raise ValueError(f"judge sanity file {path} has no rows")
+    return rows
 
 
 def judge_sanity(judge, path: str | Path = "eval/judge_sanity.jsonl") -> dict:
@@ -423,11 +495,7 @@ def judge_sanity(judge, path: str | Path = "eval/judge_sanity.jsonl") -> dict:
     Row `expect`: "unfaithful" is caught if any claim in any segment is judged unsupported; "irrelevant" is caught
     if relevance == 1; "good" is a false alarm if any claim is unsupported or relevance == 1. A row where a judge
     call ended as judge_error counts in `judge_errors` and is never counted as caught."""
-    rows = []
-    with open(path, encoding="utf-8") as f:
-        for line in f:
-            if line.strip():
-                rows.append(json.loads(line))
+    rows = load_sanity(path)
     details = []
     bad = caught = good = false_alarms = errors = 0
     for row in rows:
@@ -442,6 +510,7 @@ def judge_sanity(judge, path: str | Path = "eval/judge_sanity.jsonl") -> dict:
             hit = irrelevant
         else:
             hit = unsupported or irrelevant
+        hit = hit and not errored  # an errored row is never caught nor a false alarm
         bad += row["expect"] != "good"
         good += row["expect"] == "good"
         caught += hit and row["expect"] != "good"
@@ -464,7 +533,8 @@ def check_ollama(url: str, models: list[str]) -> str | None:
             data = json.loads(resp.read())
     except (urllib.error.URLError, OSError, ValueError, http.client.HTTPException):
         return f"Could not reach Ollama at {url}. Start it with `ollama serve`."
-    names = {m.get("name") for m in data.get("models", []) if isinstance(m, dict)} if isinstance(data, dict) else set()
+    models_list = (data.get("models") or []) if isinstance(data, dict) else []
+    names = {m.get("name") for m in models_list if isinstance(m, dict)} if isinstance(models_list, list) else set()
     for model in dict.fromkeys(models):
         if model not in names and f"{model}:latest" not in names:
             return f"Ollama model '{model}' isn't installed. Run `ollama pull {model}`."
@@ -521,8 +591,24 @@ def git_commit() -> str | None:
     return out.stdout.strip() or None if out.returncode == 0 else None
 
 
+def git_dirty() -> bool | None:
+    """Whether the working tree has uncommitted changes (`git status --porcelain`); None if git fails."""
+    try:
+        out = subprocess.run(["git", "status", "--porcelain"], capture_output=True, text=True, timeout=10)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return bool(out.stdout.strip()) if out.returncode == 0 else None
+
+
 def default_results_path() -> Path:
-    return Path("eval/results") / f"answers-{date.today().isoformat()}.json"
+    """eval/results/answers-DATE.json; if it exists, -2, -3, ... so an earlier run is never overwritten."""
+    base = f"answers-{date.today().isoformat()}"
+    path = Path("eval/results") / f"{base}.json"
+    n = 2
+    while path.exists():
+        path = Path("eval/results") / f"{base}-{n}.json"
+        n += 1
+    return path
 
 
 def write_results(path: str | Path, payload: dict) -> Path:
@@ -534,4 +620,4 @@ def write_results(path: str | Path, payload: dict) -> Path:
 
 
 def judge_info(model: str) -> dict:
-    return {"model": model, "prompt_version": JUDGE_PROMPT_VERSION}
+    return {"model": model, "prompt_version": JUDGE_PROMPT_VERSION, "max_tokens": JUDGE_MAX_TOKENS}

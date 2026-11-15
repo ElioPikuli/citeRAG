@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import sys
 import textwrap
+from pathlib import Path
 
 from .config import Settings
 
@@ -109,6 +110,14 @@ def cmd_eval_answers(args) -> int:
         if problem:
             print(f"error: {problem}", file=sys.stderr)
             return 1
+    sanity_path = None
+    if args.judge == "ollama":
+        sanity_path = args.sanity or str(Path(args.golden).parent / "judge_sanity.jsonl")
+        try:
+            ae.load_sanity(sanity_path)
+        except ValueError as e:
+            print(f"error: {e}", file=sys.stderr)
+            return 2
 
     golden = load_golden(args.golden)
     if args.limit is not None:
@@ -130,6 +139,7 @@ def cmd_eval_answers(args) -> int:
     pipeline = load_pipeline(settings, generator=generators[names[0]])
     gate = evaluate_gate(pipeline, golden)
     all_items: dict[str, list[dict]] = {}
+    partial = False
     try:
         for name in names:
             pipeline.generator = generators[name]
@@ -144,9 +154,37 @@ def cmd_eval_answers(args) -> int:
                     _verbose_item(it)
     except ae.JudgeUnavailable as e:
         print(f"error: {e}", file=sys.stderr)
-        return 1
+        partial = True
 
     results = {name: ae.summarise(items, gate) for name, items in all_items.items()}
+    sanity = None
+
+    def write() -> None:
+        if args.no_write:
+            return
+        ollama_gen = generators.get("ollama") if "ollama" in names else None
+        config = {
+            "top_k": settings.top_k, "mode": settings.mode, "min_coverage": settings.min_coverage,
+            "min_dense": settings.min_dense, "embedder": settings.embedder,
+            "generators": {n: (settings.ollama_model if n == "ollama" else None) for n in names},
+            "generation": ({"temperature": ollama_gen.temperature, "max_tokens": ollama_gen.max_tokens}
+                           if ollama_gen else None),
+            "judge": ae.judge_info(judge_model) if judge else None,
+        }
+        if args.limit is not None:
+            config["limit"] = args.limit
+        payload = {
+            "date": ae.date.today().isoformat(), "git_commit": ae.git_commit(), "git_dirty": ae.git_dirty(),
+            "config": config, "results": results, "judge_sanity": sanity, "items": all_items,
+        }
+        if partial:
+            payload["partial"] = True
+        out = ae.write_results(args.out or ae.default_results_path(), payload)
+        print(f"wrote {out}" + (" (partial: the judge became unavailable mid-run)" if partial else ""))
+
+    if partial:
+        write()
+        return 1
     print(ae.format_answer_table(results))
     answerable = gate["tp"] + gate["fn"]
     unanswerable = gate["tn"] + gate["fp"]
@@ -155,40 +193,27 @@ def cmd_eval_answers(args) -> int:
     for name, r in results.items():
         label = f" [{name}]" if len(results) > 1 else ""
         o = r["overall"]
-        print(f"model declined (heuristic): {o['model_declined']} answered questions{label}")
-        print(f"empty answers (markers only): {o['empty_answers']} answered questions{label}")
+        print(f"model declined (English heuristic): {o['model_declined']} answered questions{label}")
+        print(f"empty answers (markers only): {o['empty_answers']}, truncated at the token cap: "
+              f"{o['truncated']}, of {o['answered']} answered questions{label}")
         if judge:
             f, rel = o.get("faithfulness"), o.get("relevance_mean")
             print(f"judge ({judge_model}, prompts v{ae.JUDGE_PROMPT_VERSION}){label}: "
                   f"faithfulness {'n/a' if f is None else format(f, '.3f')} ({o.get('claims', 0)} claims), "
                   f"relevance {'n/a' if rel is None else format(rel, '.2f')}, "
-                  f"judge errors {o.get('judge_errors', 0)}/{o.get('judge_calls', 0)}")
-    sanity = None
+                  f"judge errors {o.get('judge_errors', 0)}/{o.get('judge_calls', 0)}, "
+                  f"uncited segments {o.get('uncited_segments', 0)}/{o.get('segments_total', 0)} (not judged)")
     if judge:
         try:
-            sanity = ae.judge_sanity(judge)
+            sanity = ae.judge_sanity(judge, sanity_path)
         except ae.JudgeUnavailable as e:
             print(f"error: {e}", file=sys.stderr)
+            partial = True
+            write()
             return 1
         print(f"judge sanity: caught {sanity['caught']}/{sanity['bad']} bad answers, "
               f"{sanity['false_alarms']} false alarms on {sanity['good']} good ones")
-
-    if not args.no_write:
-        config = {
-            "top_k": settings.top_k, "mode": settings.mode, "min_coverage": settings.min_coverage,
-            "min_dense": settings.min_dense,
-            "generators": {n: (settings.ollama_model if n == "ollama" else None) for n in names},
-            "judge": ae.judge_info(judge_model) if judge else None,
-        }
-        if args.limit is not None:
-            config["limit"] = args.limit
-        payload = {
-            "date": ae.date.today().isoformat(), "git_commit": ae.git_commit(), "config": config,
-            "results": results, "judge_sanity": sanity,
-            "items": all_items,
-        }
-        out = ae.write_results(args.out or ae.default_results_path(), payload)
-        print(f"wrote {out}")
+    write()
     return 0
 
 
@@ -232,6 +257,8 @@ def main(argv: list[str] | None = None) -> int:
     s.add_argument("--judge", choices=["none", "ollama"], default="none")
     s.add_argument("--judge-model", default=None, help="Ollama model for the judge (default: ollama_model)")
     s.add_argument("--golden", default="eval/golden.jsonl")
+    s.add_argument("--sanity", default=None,
+                   help="judge sanity fixture (default: judge_sanity.jsonl next to --golden); used with --judge ollama")
     s.add_argument("--limit", type=int, default=None, help="first N answerable questions plus all unanswerable ones")
     s.add_argument("--out", default=None, help="results JSON (default eval/results/answers-DATE.json)")
     s.add_argument("--no-write", action="store_true", help="don't write the results file")

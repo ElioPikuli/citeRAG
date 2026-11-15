@@ -1,4 +1,4 @@
-"""Request tracing: one JSON line per ask/search in {trace_dir}/{YYYY-MM-DD}.jsonl.
+"""Request tracing: one JSON line per ask/search/chunk read in {trace_dir}/{YYYY-MM-DD}.jsonl.
 
 Tracing must never break a request, so every write failure and every bookkeeping error is logged and swallowed;
 only exceptions raised by the pipeline itself are recorded as request errors. Traces hold the question truncated to
@@ -296,6 +296,24 @@ def traced_search(pipeline, tracer: Tracer | None, query: str, k: int, mode: str
             log.warning("could not build trace: %s: %s", type(e).__name__, e)
 
 
+def trace_chunk_read(tracer: Tracer | None, file: str, start: int, end: int, latency_ms: float, *, ok: bool,
+                     source: str = "mcp") -> None:
+    """One trace for a get_chunk call. No pipeline runs, so cost is 0.0 and only the location is recorded."""
+    if tracer is None or not tracer.enabled:
+        return
+    try:
+        trace = _blank("chunk", source, f"{file}:{start}-{end}", None, None)
+        trace["cost_usd"] = 0.0
+        trace["hits"] = [_hit_row(file, start, end, None, None, None, None)]
+        trace["latency_ms"]["total"] = round(latency_ms, 1)
+        if not ok:
+            trace["status"] = "error"
+            trace["error"] = {"type": "chunk_error", "message": "get_chunk was rejected or failed"}
+        tracer.write(trace)
+    except Exception as e:  # noqa: BLE001 - never break the request
+        log.warning("could not build trace: %s: %s", type(e).__name__, e)
+
+
 def _read_tail(path: Path, tail_bytes: int) -> list[str]:
     """Lines of the last `tail_bytes` of a file; a partial first line is dropped."""
     with path.open("rb") as f:
@@ -378,6 +396,7 @@ def summarise(traces: list[dict]) -> dict:
     cancellations don't drag the percentiles. Searches have their own latency."""
     asks = [t for t in traces if t.get("kind") == "ask"]
     searches = [t for t in traces if t.get("kind") == "search"]
+    chunks = [t for t in traces if t.get("kind") == "chunk"]
     errors = [t for t in traces if t.get("status") == "error"]
     cancelled = [t for t in traces if t.get("status") == "cancelled"]
     abstained = [t for t in asks if t.get("status") == "abstained"]
@@ -391,6 +410,7 @@ def summarise(traces: list[dict]) -> dict:
         "requests": len(traces),
         "asks": len(asks),
         "searches": len(searches),
+        "chunks": len(chunks),
         "by_source": dict(Counter(t.get("source") for t in traces)),
         "by_generator": dict(Counter(t["generator"] for t in traces if t.get("generator"))),
         "abstain_rate": len(abstained) / len(asks) if asks else None,
@@ -421,7 +441,7 @@ def format_summary(summary: dict) -> str:
     errs = ", ".join(f"{k} {v}" for k, v in s["errors_by_type"].items())
     sl = s["search_latency_ms"]
     lines = [
-        f"last {s['requests']} requests ({s['first_ts']} .. {s['last_ts']}): {s['asks']} asks, {s['searches']} searches",
+        f"last {s['requests']} requests ({s['first_ts']} .. {s['last_ts']}): {s['asks']} asks, {s['searches']} searches, {s['chunks']} chunks",
         f"abstain rate {_pct(s['abstain_rate'])}, error rate {_pct(s['error_rate'])}" + (f" ({errs})" if errs else "")
         + f", cancel rate {_pct(s['cancel_rate'])}",
         f"{'answer latency ms':<18}{'p50':>8}{'p95':>8}{'n':>5}",

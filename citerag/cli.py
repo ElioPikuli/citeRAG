@@ -1,4 +1,4 @@
-"""Command line: citerag ingest | search | ask | eval | eval-answers | traces | serve"""
+"""Command line: citerag ingest | search | ask | eval | eval-answers | traces | serve | mcp"""
 
 from __future__ import annotations
 
@@ -268,6 +268,12 @@ def cmd_serve(args) -> int:
     return 0
 
 
+def cmd_mcp(args) -> int:
+    from . import mcp_server
+
+    return mcp_server.main(args.config)
+
+
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(prog="citerag", description="Hybrid-search RAG with grounded citations")
     ap.add_argument("--config", default="citerag.toml")
@@ -316,6 +322,9 @@ def main(argv: list[str] | None = None) -> int:
     s.add_argument("--host", default="127.0.0.1")
     s.add_argument("--port", type=int, default=8000)
     s.set_defaults(fn=cmd_serve)
+
+    s = sub.add_parser("mcp", help="serve the index to MCP clients over stdio")
+    s.set_defaults(fn=cmd_mcp)
 
     args = ap.parse_args(argv)
     try:

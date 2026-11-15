@@ -14,6 +14,8 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = ["pytest>=8", "httpx>=0.27"]
+# MCP server (`citerag mcp`): the official Model Context Protocol SDK.
+mcp = ["mcp>=2.0,<3"]
 
 [project.scripts]
 citerag = "citerag.cli:main"

@@ -557,3 +557,13 @@ def test_latency_counts_only_answered_items():
              mk(error="boom", latency=1.0)]
     out = ae.aggregate(items)
     assert out["latency_p50_ms"] == 4000.0 and out["latency_p95_ms"] == 6000.0
+
+
+def test_extractive_header_is_not_judged(pipeline):
+    """The first full run judged "Most relevant passages (offline mode, no LLM):" as a claim."""
+    from citerag.evaluation import GoldenItem
+    from citerag.generation import EXTRACTIVE_HEADER
+
+    item = ae.run_item(pipeline, GoldenItem("Are partial days billed as full days?", ["proj/calc.js"], "natural"))
+    assert item["segments"] and item["text"].startswith(EXTRACTIVE_HEADER)
+    assert not any("offline mode" in s["text"] for s in item["segments"])

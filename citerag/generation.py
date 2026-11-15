@@ -456,6 +456,9 @@ class OllamaGenerator:
         return f"Ollama error {e.code}: {detail}" if detail else f"Ollama error {e.code}"
 
 
+EXTRACTIVE_HEADER = "Most relevant passages (offline mode, no LLM):\n\n"
+
+
 class ExtractiveGenerator:
     """Offline fallback: quote the sentences that best match the question, each with its citation.
     It never invents text, so it is a safe default when no API key is configured."""
@@ -493,7 +496,7 @@ class ExtractiveGenerator:
         if not chosen:
             yield {"type": "token", "text": "I couldn't find a passage in the indexed sources that answers this."}
         else:
-            yield {"type": "token", "text": "Most relevant passages (offline mode, no LLM):\n\n"}
+            yield {"type": "token", "text": EXTRACTIVE_HEADER}
             for i, s in chosen:
                 yield {"type": "token", "text": f"- {_clean(s)}"}
                 yield {"type": "cite", "hits": [i]}

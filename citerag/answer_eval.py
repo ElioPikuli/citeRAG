@@ -20,6 +20,7 @@ from datetime import date
 from pathlib import Path
 
 from .evaluation import GoldenItem
+from .generation import EXTRACTIVE_HEADER
 from .judge_prompts import (
     FAITHFULNESS_SCHEMA,
     FAITHFULNESS_SYSTEM,
@@ -70,6 +71,9 @@ def run_item(pipeline, item: GoldenItem) -> dict:
             pending += ev["text"]
         elif kind == "cite":
             valid = [i for i in ev["hits"] if 0 <= i < len(hits)]
+            # The extractive header is a label, not a claim; judging it as part of the first quote counted it
+            # as unsupported (measured in the first full run).
+            pending = pending.replace(EXTRACTIVE_HEADER, "")
             if _has_content(pending) and valid:
                 segments.append({"text": pending.strip(), "hits": valid})
             pending = ""

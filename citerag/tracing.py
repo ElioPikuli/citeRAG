@@ -297,8 +297,9 @@ def traced_search(pipeline, tracer: Tracer | None, query: str, k: int, mode: str
 
 
 def trace_chunk_read(tracer: Tracer | None, file: str, start: int, end: int, latency_ms: float, *, ok: bool,
-                     source: str = "mcp") -> None:
-    """One trace for a get_chunk call. No pipeline runs, so cost is 0.0 and only the location is recorded."""
+                     code: str | None = None, source: str = "mcp") -> None:
+    """One trace for a get_chunk call. No pipeline runs, so cost is 0.0 and only the location is recorded.
+    A failed call records its error code (not_indexed, not_found, too_large, ...) as error.type."""
     if tracer is None or not tracer.enabled:
         return
     try:
@@ -308,7 +309,23 @@ def trace_chunk_read(tracer: Tracer | None, file: str, start: int, end: int, lat
         trace["latency_ms"]["total"] = round(latency_ms, 1)
         if not ok:
             trace["status"] = "error"
-            trace["error"] = {"type": "chunk_error", "message": "get_chunk was rejected or failed"}
+            trace["error"] = {"type": code or "chunk_error", "message": "get_chunk was rejected or failed"}
+        tracer.write(trace)
+    except Exception as e:  # noqa: BLE001 - never break the request
+        log.warning("could not build trace: %s: %s", type(e).__name__, e)
+
+
+def trace_rejected(tracer: Tracer | None, kind: str, question: str, code: str, *, k=None, mode=None,
+                   source: str = "mcp") -> None:
+    """Error trace for a call that was refused before any work happened (bad arguments)."""
+    if tracer is None or not tracer.enabled:
+        return
+    try:
+        trace = _blank(kind, source, question if isinstance(question, str) else "", k if _num(k) else None,
+                       mode if isinstance(mode, str) else None)
+        trace["cost_usd"] = 0.0
+        trace["status"] = "error"
+        trace["error"] = {"type": code, "message": "the call was rejected"}
         tracer.write(trace)
     except Exception as e:  # noqa: BLE001 - never break the request
         log.warning("could not build trace: %s: %s", type(e).__name__, e)
@@ -391,13 +408,16 @@ def _sum_known(values: list) -> int:
 def summarise(traces: list[dict]) -> dict:
     """Aggregates only: no question text, no hit details.
 
-    Populations are kept apart: error_rate counts status "error" over all requests, cancel_rate counts clients
+    Populations are kept apart: error_rate counts status "error" over asks and searches (chunk reads are reported by
+    chunk_errors_by_type instead), cancel_rate counts clients
     that left early, and the answer stage latencies cover only asks that finished (ok or abstained), so errors and
     cancellations don't drag the percentiles. Searches have their own latency."""
     asks = [t for t in traces if t.get("kind") == "ask"]
     searches = [t for t in traces if t.get("kind") == "search"]
     chunks = [t for t in traces if t.get("kind") == "chunk"]
-    errors = [t for t in traces if t.get("status") == "error"]
+    served = [t for t in traces if t.get("kind") != "chunk"]  # error_rate is about asks and searches
+    errors = [t for t in served if t.get("status") == "error"]
+    chunk_errors = [t for t in chunks if t.get("status") == "error"]
     cancelled = [t for t in traces if t.get("status") == "cancelled"]
     abstained = [t for t in asks if t.get("status") == "abstained"]
     ok_asks = [t for t in asks if t.get("status") == "ok"]
@@ -414,7 +434,7 @@ def summarise(traces: list[dict]) -> dict:
         "by_source": dict(Counter(t.get("source") for t in traces)),
         "by_generator": dict(Counter(t["generator"] for t in traces if t.get("generator"))),
         "abstain_rate": len(abstained) / len(asks) if asks else None,
-        "error_rate": len(errors) / len(traces) if traces else None,
+        "error_rate": len(errors) / len(served) if served else None,
         "cancel_rate": len(cancelled) / len(traces) if traces else None,
         "latency_ms": {s: _stage(answered, s) for s in STAGES},
         "search_latency_ms": _stage(ok_searches, "total"),
@@ -423,6 +443,7 @@ def summarise(traces: list[dict]) -> dict:
                    "output": _sum_known([u.get("output_tokens") for u in usages])},
         "cost_usd": {"total": round(_sum_known(costs), 8), "unknown": sum(1 for c in costs if c is None)},
         "errors_by_type": dict(Counter(str((t.get("error") or {}).get("type", "unknown")) for t in errors)),
+        "chunk_errors_by_type": dict(Counter(str((t.get("error") or {}).get("type", "unknown")) for t in chunk_errors)),
         "first_ts": stamps[0] if stamps else None,
         "last_ts": stamps[-1] if stamps else None,
     }
@@ -439,6 +460,7 @@ def _ms(x: float | None) -> str:
 def format_summary(summary: dict) -> str:
     s = summary
     errs = ", ".join(f"{k} {v}" for k, v in s["errors_by_type"].items())
+    chunk_errs = ", ".join(f"{k} {v}" for k, v in s.get("chunk_errors_by_type", {}).items())
     sl = s["search_latency_ms"]
     lines = [
         f"last {s['requests']} requests ({s['first_ts']} .. {s['last_ts']}): {s['asks']} asks, {s['searches']} searches, {s['chunks']} chunks",
@@ -458,4 +480,6 @@ def format_summary(summary: dict) -> str:
     gens = ", ".join(f"{k} {v}" for k, v in s["by_generator"].items()) or "-"
     srcs = ", ".join(f"{k} {v}" for k, v in s["by_source"].items()) or "-"
     lines.append(f"by generator: {gens} · by source: {srcs}")
+    if chunk_errs:
+        lines.append(f"chunk read errors: {chunk_errs}")
     return "\n".join(lines)

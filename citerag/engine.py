@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import sys
+
 from .config import Settings
 from .embeddings import Embedder, make_embedder
 from .generation import Generator, default_generator
@@ -9,6 +11,16 @@ from .loaders import load_documents
 from .pipeline import RagPipeline
 from .retriever import Retriever
 from .store import BuildReport, Index, IndexMismatch
+
+
+def warn_duplicate_sources(paths: list) -> None:
+    """Indexed ids start with the source folder's name, so two sources with one name make ids ambiguous
+    (get_chunk then falls back to the content hash to pick the right file)."""
+    seen: set[str] = set()
+    for p in paths:
+        if p.name in seen:
+            print(f"warning: two sources share the name '{p.name}'; indexed ids are ambiguous", file=sys.stderr)
+        seen.add(p.name)
 
 
 def ingest(settings: Settings, embedder: Embedder | None = None, *, rebuild: bool = False) -> tuple[Index, BuildReport]:
@@ -19,7 +31,9 @@ def ingest(settings: Settings, embedder: Embedder | None = None, *, rebuild: boo
             previous = Index.load(settings.index_dir, expect_embedder=embedder.name)
         except IndexMismatch:
             previous = None  # incompatible: rebuild from scratch
-    docs = load_documents(settings.source_paths(), settings.include, settings.exclude)
+    paths = settings.source_paths()
+    warn_duplicate_sources(paths)
+    docs = load_documents(paths, settings.include, settings.exclude)
     index, report = Index.build(
         docs, embedder, max_chars=settings.max_chars, overlap_chars=settings.overlap_chars, previous=previous
     )

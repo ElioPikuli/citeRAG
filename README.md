@@ -34,7 +34,16 @@ No vector database and no LangChain: every stage is small, readable and tested.
   version and the embedder name in the manifest force a rebuild when either changes.
 - **Runs without an API key.** Without `ANTHROPIC_API_KEY`, an extractive generator quotes the best-matching
   source sentences with citations, and the UI shows "offline mode". Embeddings run locally, so the whole app
-  is free to host. All 64 tests run offline.
+  is free to host. A local model through Ollama is a third option, with citations parsed from `[n]` markers.
+- **Answers are measured, not only retrieval.** `citerag eval-answers` reports citation coverage and precision,
+  invalid markers and latency, and a local LLM judge scores faithfulness per cited claim. The judge is checked
+  against hand-written bad answers first. Everything runs free on a laptop.
+- **Observable.** Every request leaves a JSON trace (per-stage latency, tokens, estimated cost, errors);
+  `/metrics`, `citerag traces` and a UI panel summarise them.
+- **Usable from other AI tools.** An MCP server lets Claude Desktop, Claude Code or Cursor search the index, read
+  exact source lines and get cited answers.
+- **Tested and gated in CI.** 310 offline tests; GitHub Actions rebuilds the index and fails the build if hybrid
+  Hit@5 drops below 0.95 or the abstain gate makes a wrong call.
 - **Multilingual-aware.** Unicode tokenization, Hebrew abbreviation handling (מ״ק) and right-to-left rendering;
   one of the indexed projects is a Hebrew app.
 
@@ -243,12 +252,19 @@ flowchart LR
     I --> R
     R -->|bm25 · dense · hybrid RRF| M[MMR] --> G{abstain gate}
     G -->|off-topic| A[“not in the sources”]
-    G -->|answerable| LLM[Claude<br/>search_result blocks → citations]
-    G -->|no API key| X[extractive quotes]
+    G -->|answerable| GEN{generator}
+    GEN --> LLM[Claude<br/>native citations]
+    GEN --> OL[Ollama<br/>parsed n markers]
+    GEN --> X[extractive quotes]
   end
-  LLM --> S[SSE: sources · token · cite · done]
+  LLM --> S[event stream: sources · token · cite · done]
+  OL --> S
   X --> S
   A --> S
+  S --> UI[web UI · SSE API]
+  S --> CLI[CLI]
+  S --> MCP[MCP server<br/>stdio]
+  S --> T[(traces/date.jsonl)] --> MET[/metrics · citerag traces/]
 ```
 
 | Module | Role |
@@ -261,9 +277,13 @@ flowchart LR
 | [citerag/store.py](citerag/store.py) | persisted index, atomic save, incremental rebuild |
 | [citerag/retriever.py](citerag/retriever.py) | BM25 / dense / RRF hybrid, MMR, per-stage scores |
 | [citerag/pipeline.py](citerag/pipeline.py) | retrieve → abstain gate → generate, as one event stream |
-| [citerag/generation.py](citerag/generation.py) | Claude generator (streaming, citations, refusal fallback) and extractive generator |
+| [citerag/generation.py](citerag/generation.py) | Claude generator (streaming, citations, refusal fallback), Ollama generator with `[n]` marker parsing, extractive generator |
 | [citerag/api.py](citerag/api.py), [web/](web/) | FastAPI + SSE, single-page UI with a retrieval inspector |
 | [citerag/evaluation.py](citerag/evaluation.py) | Hit@k, Recall@k, MRR, nDCG@k per retriever and per slice; abstain-gate accuracy |
+| [citerag/answer_eval.py](citerag/answer_eval.py), [judge_prompts.py](citerag/judge_prompts.py) | answer quality: citation metrics, local LLM judge (faithfulness, relevance), judge sanity check |
+| [citerag/tracing.py](citerag/tracing.py) | per-request traces, cost estimates, `/metrics` and `citerag traces` aggregates |
+| [citerag/mcp_server.py](citerag/mcp_server.py) | MCP server: `search_sources`, `get_chunk`, `ask` |
+| [.github/workflows/ci.yml](.github/workflows/ci.yml) | tests + retrieval quality gate on every push, no API keys |
 
 Full design notes and trade-offs: [docs/DESIGN.md](docs/DESIGN.md).
 
@@ -411,7 +431,7 @@ Caveats:
 
 ## Testing
 
-309 tests, all offline (no Ollama, network or API key), ~18 s. They cover the Ollama generator against an
+310 tests, all offline (no Ollama, network or API key), ~18 s. They cover the Ollama generator against an
 in-process fake server (citation-marker parsing under any fragmenting, invalid markers, source-block injection,
 unreachable or broken servers) and the answer eval (metric arithmetic on hand-built answers, judge JSON
 validation and retry, the sanity check, a CLI run with fakes) and tracing (every request outcome including

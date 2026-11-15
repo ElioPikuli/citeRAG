@@ -55,3 +55,19 @@ def test_regression_floor_on_real_index():
     gate = evaluate_gate(p, golden)
     assert gate["abstained_when_unanswerable"] == 1.0
     assert gate["answered_when_answerable"] >= 0.95
+
+
+def test_eval_floors_exit_code(capsys):
+    """`citerag eval --min-hit/--min-gate-accuracy` is what CI relies on to fail the build."""
+    from types import SimpleNamespace
+
+    from citerag.cli import _check_floors
+
+    perfect = {"tp": 50, "fn": 0, "tn": 6, "fp": 0}
+    args = SimpleNamespace(k=5, min_hit=0.95, min_gate_accuracy=1.0)
+    assert _check_floors(args, 0.98, perfect) == 0
+    assert _check_floors(args, 0.94, perfect) == 1
+    assert "Hit@5 0.940 < 0.95" in capsys.readouterr().err
+    assert _check_floors(args, 0.98, {"tp": 50, "fn": 0, "tn": 5, "fp": 1}) == 1  # one off-topic answered
+    assert "refused 5/6" in capsys.readouterr().err
+    assert _check_floors(SimpleNamespace(k=5, min_hit=None, min_gate_accuracy=None), 0.0, perfect) == 0

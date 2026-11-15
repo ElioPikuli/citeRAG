@@ -1,0 +1,55 @@
+name: CI
+
+# Tests plus the retrieval quality gate, on every push and pull request. Everything is free: no API keys exist
+# here, the Claude generator is only exercised against fakes, and the eval is retrieval-only.
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test-and-eval:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      # The ONNX embedding model (~70 MB) is downloaded once and restored from the cache afterwards.
+      FASTEMBED_CACHE_PATH: ${{ github.workspace }}/.cache/fastembed
+      # Belt and braces: even if a key were ever added to the repo's secrets, nothing here would pick Claude.
+      CITERAG_GENERATOR: extractive
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: pyproject.toml
+
+      - name: Cache the embedding model
+        uses: actions/cache@v4
+        with:
+          path: .cache/fastembed
+          key: fastembed-BAAI-bge-small-en-v1.5-${{ hashFiles('pyproject.toml') }}
+          restore-keys: fastembed-BAAI-bge-small-en-v1.5-
+
+      - name: Install
+        run: pip install -e ".[dev,mcp]"
+
+      - name: Fetch the indexed projects (public repos and the live portfolio site)
+        run: python scripts/fetch_projects.py
+
+      - name: Build the index
+        run: citerag ingest
+
+      # Includes the regression floor on the real index (tests/test_evaluation.py) and the MCP stdio test.
+      - name: Tests
+        run: pytest
+
+      - name: Retrieval eval (fails below hybrid Hit@5 0.95 or abstain-gate accuracy 100%)
+        run: citerag eval -k 5 --min-hit 0.95 --min-gate-accuracy 1.0

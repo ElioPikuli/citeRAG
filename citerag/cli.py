@@ -98,6 +98,26 @@ def cmd_eval(args) -> int:
         for q in results["hybrid"].per_query:
             mark = "ok " if q["hit"] else "MISS"
             print(f"{mark} rr={q['rr']:.2f}  {q['question']}")
+    return _check_floors(args, results["hybrid"].hit_at_k, gate)
+
+
+def _check_floors(args, hybrid_hit: float, gate: dict) -> int:
+    """CI gate: exit 1 if hybrid Hit@k or the abstain gate's accuracy (right decisions on answerable and
+    unanswerable questions together) falls below the given floors. No floors given: always 0."""
+    total = gate["tp"] + gate["fn"] + gate["tn"] + gate["fp"]
+    accuracy = (gate["tp"] + gate["tn"]) / total if total else 0.0
+    failures = []
+    if args.min_hit is not None and hybrid_hit < args.min_hit:
+        failures.append(f"hybrid Hit@{args.k} {hybrid_hit:.3f} < {args.min_hit}")
+    if args.min_gate_accuracy is not None and accuracy < args.min_gate_accuracy:
+        failures.append(f"abstain-gate accuracy {accuracy:.3f} < {args.min_gate_accuracy} "
+                        f"(answered {gate['tp']}/{gate['tp'] + gate['fn']}, refused {gate['tn']}/{gate['tn'] + gate['fp']})")
+    for f in failures:
+        print(f"FAIL: {f}", file=sys.stderr)
+    if failures:
+        return 1
+    if args.min_hit is not None or args.min_gate_accuracy is not None:
+        print(f"floors met: hybrid Hit@{args.k} {hybrid_hit:.3f}, abstain-gate accuracy {accuracy:.3f}")
     return 0
 
 
@@ -297,6 +317,9 @@ def main(argv: list[str] | None = None) -> int:
     s.add_argument("--golden", default="eval/golden.jsonl")
     s.add_argument("-k", type=int, default=5)
     s.add_argument("-v", "--verbose", action="store_true")
+    s.add_argument("--min-hit", type=float, default=None, help="exit 1 if hybrid Hit@k is below this (CI)")
+    s.add_argument("--min-gate-accuracy", type=float, default=None,
+                   help="exit 1 if the abstain gate's accuracy over all questions is below this (CI)")
     s.set_defaults(fn=cmd_eval)
 
     s = sub.add_parser("eval-answers", help="answer quality: citations, latency and an optional local LLM judge")
